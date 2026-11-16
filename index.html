@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>音程チェック 段階0 マイク動作確認</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --card: #ffffff; --text: #1d1d1f; --sub: #6b6b70;
+    --line: #e2e0db; --accent: #2f6fd6; --ok: #2e9e5b; --warn: #d9822b; --bad: #d64545;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #131315; --card: #1e1e21; --text: #f2f2f4; --sub: #a0a0a8; --line: #333338; --accent: #5b92ee; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    -webkit-text-size-adjust: 100%; }
+  body { padding: calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 24px); }
+  .wrap { max-width: 480px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+  h1 { font-size: 20px; margin: 4px 0 0; }
+  .lead { color: var(--sub); font-size: 14px; margin: 0; line-height: 1.6; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px; }
+  .status { font-size: 17px; font-weight: 600; text-align: center; min-height: 1.5em; }
+  .status.ok { color: var(--ok); } .status.bad { color: var(--bad); } .status.wait { color: var(--sub); }
+  .meter { position: relative; height: 56px; border-radius: 12px; background: var(--line); overflow: hidden; margin-top: 14px; }
+  .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
+    background: linear-gradient(90deg, var(--ok) 0%, var(--ok) 65%, var(--warn) 85%, var(--bad) 100%);
+    background-size: 100vw 100%; transition: width 40ms linear; }
+  .peak { position: absolute; top: 0; bottom: 0; width: 3px; background: var(--text); left: 0%; opacity: .7; }
+  .scale { display: flex; justify-content: space-between; color: var(--sub); font-size: 12px; margin-top: 6px; }
+  .db { text-align: center; font-size: 44px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 10px; }
+  .db small { font-size: 18px; color: var(--sub); font-weight: 500; }
+  button { width: 100%; min-height: 64px; font-size: 20px; font-weight: 700; border: 0; border-radius: 16px;
+    background: var(--accent); color: #fff; -webkit-tap-highlight-color: transparent; }
+  button.stop { background: var(--bad); }
+  button:active { transform: scale(.98); }
+  .info { font-size: 13px; color: var(--sub); line-height: 1.7; word-break: break-all; }
+  .info b { color: var(--text); font-weight: 600; }
+  .err { font-size: 14px; line-height: 1.7; color: var(--bad); white-space: pre-wrap; display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div>
+    <h1>段階0　マイク動作確認</h1>
+    <p class="lead">「マイク開始」を押して声を出し、メーターが動くかを確かめます。</p>
+  </div>
+
+  <div class="card">
+    <div id="status" class="status wait">停止中</div>
+    <div class="meter"><div id="bar" class="bar"></div><div id="peak" class="peak"></div></div>
+    <div class="scale"><span>−60 dB</span><span>−30</span><span>0 dB</span></div>
+    <div class="db"><span id="db">―</span> <small>dB</small></div>
+  </div>
+
+  <button id="btn" type="button">マイク開始</button>
+
+  <div id="err" class="card err"></div>
+
+  <div class="card info" id="info"></div>
+</div>
+
+<script>
+(function () {
+  const btn = document.getElementById('btn');
+  const statusEl = document.getElementById('status');
+  const bar = document.getElementById('bar');
+  const peakEl = document.getElementById('peak');
+  const dbEl = document.getElementById('db');
+  const errEl = document.getElementById('err');
+  const infoEl = document.getElementById('info');
+
+  const MIN_DB = -60;
+  let ctx = null, stream = null, analyser = null, buf = null, raf = 0;
+  let running = false, peakDb = MIN_DB, peakTime = 0, shownDb = MIN_DB;
+
+  function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = 'status ' + cls; }
+  function showError(msg) { errEl.textContent = msg; errEl.style.display = msg ? 'block' : 'none'; }
+
+  function renderInfo(extra) {
+    const md = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    const rows = [
+      ['安全な接続（isSecureContext）', window.isSecureContext ? 'はい' : 'いいえ'],
+      ['マイク機能（getUserMedia）', md ? 'あり' : 'なし'],
+      ['Web Audio', (window.AudioContext || window.webkitAudioContext) ? 'あり' : 'なし'],
+      ['埋め込み表示', window.self !== window.top ? 'はい（枠の中で表示）' : 'いいえ']
+    ];
+    if (extra) for (const r of extra) rows.push(r);
+    infoEl.innerHTML = '<div style="margin-bottom:6px"><b>動作環境の情報</b>（うまくいかないときはこの欄も知らせてください）</div>' +
+      rows.map(r => '<div>' + r[0] + '：<b>' + r[1] + '</b></div>').join('');
+  }
+
+  function explain(e) {
+    const name = (e && e.name) || 'Error';
+    const msg = (e && e.message) || String(e);
+    let hint = '';
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      hint = 'マイクの使用が許可されませんでした。許可の確認が出なかった場合は、このページの表示場所ではマイクが使えない可能性があります。';
+    } else if (name === 'NotFoundError') {
+      hint = 'マイクが見つかりませんでした。';
+    } else if (name === 'NotReadableError') {
+      hint = 'マイクを他のアプリが使用中の可能性があります。通話や録音アプリを閉じて再度お試しください。';
+    } else if (name === 'NoMediaDevices') {
+      hint = 'このページの表示場所ではマイク機能そのものが使えません。';
+    }
+    return hint + '\n\nエラー名：' + name + '\n内容：' + msg;
+  }
+
+  async function start() {
+    showError('');
+    setStatus('マイクを準備中…', 'wait');
+    try {
+      // iPhoneでは画面操作の中で音声処理を始める必要があるため、ここで作る
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) throw Object.assign(new Error('Web Audio API がありません'), { name: 'NoWebAudio' });
+      ctx = new AC();
+      const resumeP = ctx.resume ? ctx.resume() : Promise.resolve();
+
+      if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+        throw Object.assign(new Error('navigator.mediaDevices.getUserMedia がありません'), { name: 'NoMediaDevices' });
+      }
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        video: false
+      });
+      await resumeP;
+
+      const src = ctx.createMediaStreamSource(stream);
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0;
+      src.connect(analyser); // スピーカーには出さない
+      buf = new Float32Array(analyser.fftSize);
+
+      const track = stream.getAudioTracks()[0];
+      const s = track && track.getSettings ? track.getSettings() : {};
+      renderInfo([
+        ['サンプリング周波数', ctx.sampleRate + ' Hz'],
+        ['マイク名', (track && track.label) || '（不明）'],
+        ['エコー除去', s.echoCancellation === undefined ? '不明' : (s.echoCancellation ? 'オン' : 'オフ')],
+        ['ノイズ除去', s.noiseSuppression === undefined ? '不明' : (s.noiseSuppression ? 'オン' : 'オフ')],
+        ['自動音量調整', s.autoGainControl === undefined ? '不明' : (s.autoGainControl ? 'オン' : 'オフ')]
+      ]);
+
+      running = true;
+      peakDb = MIN_DB; shownDb = MIN_DB;
+      btn.textContent = 'マイク停止';
+      btn.classList.add('stop');
+      setStatus('マイク動作中　声を出してください', 'ok');
+      loop();
+    } catch (e) {
+      cleanup();
+      setStatus('マイクを開始できませんでした', 'bad');
+      showError(explain(e));
+    }
+  }
+
+  function cleanup() {
+    running = false;
+    cancelAnimationFrame(raf);
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    if (ctx) { try { ctx.close(); } catch (_) {} ctx = null; }
+    analyser = null;
+    bar.style.width = '0%'; peakEl.style.left = '0%'; dbEl.textContent = '―';
+    btn.textContent = 'マイク開始';
+    btn.classList.remove('stop');
+  }
+
+  function stop() { cleanup(); setStatus('停止中', 'wait'); }
+
+  function loop() {
+    if (!running || !analyser) return;
+    analyser.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    const rms = Math.sqrt(sum / buf.length);
+    const db = rms > 0 ? Math.max(MIN_DB, 20 * Math.log10(rms)) : MIN_DB;
+
+    // 上がるときはすぐ、下がるときはゆっくり
+    shownDb = db > shownDb ? db : shownDb - 0.8;
+    if (shownDb < MIN_DB) shownDb = MIN_DB;
+
+    const now = performance.now();
+    if (shownDb >= peakDb) { peakDb = shownDb; peakTime = now; }
+    else if (now - peakTime > 1200) { peakDb = Math.max(MIN_DB, peakDb - 0.6); }
+
+    const pct = v => ((v - MIN_DB) / -MIN_DB * 100).toFixed(1) + '%';
+    bar.style.width = pct(shownDb);
+    peakEl.style.left = 'calc(' + pct(peakDb) + ' - 3px)';
+    dbEl.textContent = shownDb <= MIN_DB ? '−60' : Math.round(shownDb).toString().replace('-', '−');
+    raf = requestAnimationFrame(loop);
+  }
+
+  btn.addEventListener('click', () => { running ? stop() : start(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && running) stop(); });
+  renderInfo();
+})();
+</script>
+</body>
+</html>
