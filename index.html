@@ -99,6 +99,10 @@
   .seg button { flex: 1; min-height: 52px; border-radius: 12px; border: 2px solid var(--line); background: var(--card);
     font-size: 16px; font-weight: 600; }
   .seg button.on { border-color: var(--accent); background: var(--accent); color: #fff; }
+  .tonics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .tonics button { min-height: 48px; border-radius: 12px; border: 2px solid var(--line); background: var(--card); font-size: 16px; font-weight: 600; }
+  .tonics button.on { border-color: var(--accent); background: var(--accent); color: #fff; }
+  #tonicBox.off { opacity: .4; }
   .hint { font-size: 12px; color: var(--sub); margin-top: 6px; line-height: 1.6; }
 
   table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
@@ -162,6 +166,19 @@
 <div class="sheet" id="sheet" role="dialog" aria-label="設定">
   <div class="sheet-inner">
     <div class="sheet-head"><h2>設定</h2><button class="close" id="close" type="button">閉じる</button></div>
+
+    <div class="card">
+      <div class="label">音律</div>
+      <div class="seg" id="temperSeg">
+        <button type="button" data-v="et">平均律</button>
+        <button type="button" data-v="ji">純正律</button>
+      </div>
+      <div id="tonicBox" style="margin-top:14px">
+        <div class="label">主音（純正律のとき）</div>
+        <div class="tonics" id="tonicGrid"></div>
+        <div class="hint">主音の高さは、平均律でのその音の高さ（基準音Aから計算）にそろえます。</div>
+      </div>
+    </div>
 
     <div class="card">
       <div class="label">判定幅（この範囲内なら「正しい」）</div>
@@ -266,6 +283,29 @@ function nearestET(freq, A) {
   return { midi: n, ref, cents: 1200 * Math.log2(freq / ref) };
 }
 
+/* ===== 純正律 ===== */
+// 主音からの半音数 0〜11 に対する周波数比（計画書の表）
+const JI_RATIOS = [1/1, 16/15, 9/8, 6/5, 5/4, 4/3, 45/32, 3/2, 8/5, 5/3, 16/9, 15/8];
+// tonicPc: 主音（C=0 … B=11）。主音の高さは平均律（基準音A）でのその音の高さにそろえる
+function nearestJI(freq, A, tonicPc) {
+  const tonicMidi = 60 + tonicPc;
+  const tonicF = A * Math.pow(2, (tonicMidi - 69) / 12);
+  const k0 = Math.floor(Math.log2(freq / tonicF));
+  let best = null;
+  for (let k = k0 - 1; k <= k0 + 1; k++) {
+    for (let i = 0; i < 12; i++) {
+      const ref = tonicF * JI_RATIOS[i] * Math.pow(2, k);
+      const cents = 1200 * Math.log2(freq / ref);
+      if (!best || Math.abs(cents) < Math.abs(best.cents)) best = { midi: tonicMidi + 12 * k + i, ref, cents };
+    }
+  }
+  return best;
+}
+// 設定に従って最寄りの正しい音を求める
+function nearestNote(freq, st) {
+  return st.temper === 'ji' ? nearestJI(freq, st.A, st.tonic) : nearestET(freq, st.A);
+}
+
 // 英音名（C4＝中央ハ）
 const NAMES_EN = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 // ドイツ音名（楽譜読み取り指示書10章）。調が分からないため、黒鍵は合唱でよく使う綴りにする
@@ -286,7 +326,10 @@ function noteNameDE(midi) {
   return cap + (SUB[2 - oct] || '_' + (2 - oct));
 }
 function noteNameJP(midi) { return NAMES_JP[((midi % 12) + 12) % 12]; }
+const KEY_DE = ['C', 'Cis', 'D', 'Es', 'E', 'F', 'Fis', 'G', 'As', 'A', 'B', 'H'];
+const KEY_EN = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
 function noteName(midi, style) {
+  const pc = ((midi % 12) + 12) % 12;
   return style === 'en' ? noteNameEN(midi) : style === 'jp' ? noteNameJP(midi) : noteNameDE(midi);
 }
 function fmtCents(c) {
@@ -311,7 +354,7 @@ function median(arr) {
   const VERDICT_TEXT = { ok: '正しい', high: '高い', low: '低い' };
 
   /* --- 設定（端末に保存） --- */
-  const DEF = { A: 442, tol: 10, names: 'de', level: -50 };
+  const DEF = { A: 442, tol: 10, names: 'de', level: -50, temper: 'et', tonic: 0 };
   const S = Object.assign({}, DEF);
   try {
     const saved = JSON.parse(localStorage.getItem('pc_settings') || '{}');
@@ -321,6 +364,8 @@ function median(arr) {
     if (saved.tol >= 1 && saved.tol <= 50) S.tol = saved.tol;
     if (['de', 'en', 'jp'].includes(saved.names)) S.names = saved.names;
     if (saved.level >= -70 && saved.level <= -20) S.level = saved.level;
+    if (saved.temper === 'et' || saved.temper === 'ji') S.temper = saved.temper;
+    if (Number.isInteger(saved.tonic) && saved.tonic >= 0 && saved.tonic <= 11) S.tonic = saved.tonic;
   } catch (_) {}
   function save() { try { localStorage.setItem('pc_settings', JSON.stringify(S)); } catch (_) {} }
 
@@ -336,7 +381,7 @@ function median(arr) {
   }
   function showNote(freq) {
     lastShown = freq;
-    const r = nearestET(freq, S.A);
+    const r = nearestNote(freq, S);
     const v = judge(r.cents, S.tol);
     nowEl.className = 'card now ' + v;
     noteEl.textContent = noteName(r.midi, S.names); noteEl.classList.remove('dim');
@@ -391,7 +436,15 @@ function median(arr) {
 
   /* --- 設定の反映 --- */
   function applySettings() {
-    $('summary').textContent = '平均律・A=' + S.A + 'Hz・±' + S.tol + '¢';
+    $('summary').textContent = (S.temper === 'ji' ? '純正律（主音' + (S.names === 'de' ? KEY_DE[S.tonic] : S.names === 'en' ? KEY_EN[S.tonic] : noteNameJP(60 + S.tonic)) + '）' : '平均律') +
+      '・A=' + S.A + 'Hz・±' + S.tol + '¢';
+    document.querySelectorAll('#temperSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === S.temper));
+    $('tonicBox').classList.toggle('off', S.temper !== 'ji');
+    document.querySelectorAll('#tonicGrid button').forEach(b => {
+      const pc = parseInt(b.dataset.v, 10);
+      b.textContent = S.names === 'de' ? KEY_DE[pc] : S.names === 'en' ? KEY_EN[pc] : noteNameJP(60 + pc);
+      b.classList.toggle('on', pc === S.tonic);
+    });
     $('aVal').textContent = S.A; $('aRange').value = S.A;
     $('aMinus').disabled = S.A <= 430; $('aPlus').disabled = S.A >= 450;
     $('tVal').textContent = S.tol; $('tRange').value = S.tol;
@@ -421,6 +474,13 @@ function median(arr) {
   $('tReset').onclick = () => setTol(10);
   $('lRange').oninput = e => { S.level = parseInt(e.target.value, 10); applySettings(); };
   $('lReset').onclick = () => { S.level = -50; applySettings(); };
+  for (let pc = 0; pc < 12; pc++) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.v = pc;
+    b.onclick = () => { S.tonic = pc; if (S.temper !== 'ji') S.temper = 'ji'; applySettings(); };
+    $('tonicGrid').appendChild(b);
+  }
+  document.querySelectorAll('#temperSeg button').forEach(b => b.onclick = () => { S.temper = b.dataset.v; applySettings(); });
   document.querySelectorAll('#nameSeg button').forEach(b => b.onclick = () => { S.names = b.dataset.v; applySettings(); });
 
   /* --- 設定パネルの開閉 --- */
@@ -530,7 +590,7 @@ function median(arr) {
     const p = db >= S.level ? detectPitchYIN(buf, ctx.sampleRate) : null;
     if (p) {
       // 2半音以上離れた音に移ったら中央値の履歴をリセット（前の音を引きずらない）
-      const m = nearestET(p.freq, S.A).midi;
+      const m = nearestNote(p.freq, S).midi;
       if (lastMidi !== null && Math.abs(m - lastMidi) >= 2) recent = [];
       lastMidi = m;
       recent.push(p.freq);
@@ -538,7 +598,7 @@ function median(arr) {
       lastVoiced = now;
       const f = median(recent);
       showNote(f);
-      history.push({ t, c: nearestET(f, S.A).cents });
+      history.push({ t, c: nearestNote(f, S).cents });
     } else {
       history.push({ t, c: null });
       if (now - lastVoiced > HOLD_MS) { recent = []; lastMidi = null; clearNote(); }
@@ -561,6 +621,8 @@ function median(arr) {
       { label: 'A4より3Hz高い', f: A + 3 },
       { label: 'E2（バス低音）', f: etFreq(40) },
       { label: 'C4', f: etFreq(60) },
+      { label: '平均律のE4', f: etFreq(64) },
+      { label: '平均律のG4', f: etFreq(67) },
       { label: 'B3', f: etFreq(59) },
       { label: 'B♭3', f: etFreq(58) },
       { label: 'C6（ソプラノ高音）', f: etFreq(84) },
@@ -573,13 +635,13 @@ function median(arr) {
       const ph = Math.random() * 2 * Math.PI;
       for (let i = 0; i < b.length; i++) b[i] = 0.5 * Math.sin(2 * Math.PI * c.f * i / sr + ph);
       const p = detectPitchYIN(b, sr);
-      const truth = nearestET(c.f, A);
+      const truth = nearestNote(c.f, S);
       if (!p) {
         allPass = false;
         rows += '<tr><td>' + c.label + '</td><td>' + c.f.toFixed(2) + '</td><td colspan="2">検出なし</td><td class="fail">×</td></tr>';
         continue;
       }
-      const r = nearestET(p.freq, A);
+      const r = nearestNote(p.freq, S);
       const errC = 1200 * Math.log2(p.freq / c.f);
       const ok = r.midi === truth.midi && Math.abs(errC) <= 1;
       if (!ok) allPass = false;
@@ -590,7 +652,7 @@ function median(arr) {
     $('testOut').innerHTML =
       '<table style="margin-top:12px"><tr><th>テスト</th><th>入力Hz</th><th>音名</th><th>ずれ</th><th>誤差¢</th></tr>' + rows + '</table>' +
       '<div class="testnote">' + (allPass ? '<span class="pass">すべて合格</span>' : '<span class="fail">不合格あり</span>') +
-      '（誤差が±1¢以内で合格。サンプリング周波数 ' + sr + 'Hz、基準音 A=' + A + 'Hz で計算）</div>';
+      '（誤差が±1¢以内で合格。サンプリング周波数 ' + sr + 'Hz、基準音 A=' + A + 'Hz、' + $('summary').textContent.split('・')[0] + ' で計算）</div>';
   };
 
   renderInfo();
