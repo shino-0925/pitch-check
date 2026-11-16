@@ -113,6 +113,12 @@
   .stat .k { font-size: 12px; color: var(--sub); }
   .stat .v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
   .hi { color: var(--high-fg); } .lo { color: var(--low-fg); } .okc { color: var(--ok-fg); }
+  .rollnav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+  .rollnav .step { width: 64px; height: 48px; font-size: 20px; }
+  .rollnav span { font-size: 14px; color: var(--sub); text-align: center; flex: 1; font-variant-numeric: tabular-nums; }
+  tr.jump { cursor: pointer; }
+  tr.cur td { background: var(--bg); }
+  .wronglist { margin: 6px 0 12px; padding-left: 1.2em; font-size: 14px; line-height: 1.8; }
   .sm { display: none; }
   body.score .sm { display: block; }
   body.score .nm { display: none !important; }
@@ -259,6 +265,11 @@
   <div class="card sm">
     <canvas id="roll" aria-label="楽譜の音と歌声の音高"></canvas>
     <div class="glegend"><span>横棒：楽譜の音（太さ＝判定幅）</span><span>線：歌声</span></div>
+    <div class="rollnav" id="rollNav" style="display:none">
+      <button class="step" id="pgPrev" type="button" aria-label="前のページ">◀</button>
+      <span id="pgInfo"></span>
+      <button class="step" id="pgNext" type="button" aria-label="次のページ">▶</button>
+    </div>
   </div>
 
   <div class="card sm">
@@ -268,6 +279,28 @@
       <div class="meter"><div id="scBar" class="bar"></div></div>
       <span id="scDb" class="status">―</span>
     </div>
+    <label class="big sub filebtn" for="scFile">録音ファイルと照らし合わせる</label>
+    <input type="file" id="scFile" accept="audio/*,.m4a,.mp3,.wav,.aac" style="display:none">
+  </div>
+
+  <div class="card sm" id="scFileCard" style="display:none">
+    <div class="filehead"><b id="scFileName"></b><button class="xbtn" id="scFileClose" type="button" aria-label="閉じる">×</button></div>
+    <div class="hint" id="scFileProg"></div>
+    <div id="scAlign" style="display:none; margin-top:10px">
+      <div class="label">開始位置の合わせ方：録音で最初に声が出た時刻を、開始位置の最初の音の始まりにそろえます</div>
+      <div class="stepper small">
+        <button class="step" id="alMinus" type="button" aria-label="0.05秒前へ">−</button>
+        <div class="val"><span id="alVal">±0.00</span><small>秒</small><div class="hint" id="alInfo"></div></div>
+        <button class="step" id="alPlus" type="button" aria-label="0.05秒後へ">＋</button>
+      </div>
+      <button class="reset" id="alReset" type="button">自動の位置に戻す</button>
+      <div class="hint">図で歌声の線が横棒より右（遅れて見える）なら＋、左なら−を押してそろえます（0.05秒刻み）。</div>
+    </div>
+  </div>
+
+  <div class="card sm" id="scSumCard" style="display:none">
+    <div class="label" id="scSumTitle">まとめ</div>
+    <div id="scSum"></div>
   </div>
 
   <div id="err" class="card err"></div>
@@ -658,7 +691,7 @@ function median(arr) {
     $('band').style.width = (2 * w) + '%';
     if (lastShown) showNote(lastShown);
     drawGraph();
-    if (SC.tl) { const w2 = Math.min(50, S.tol); $('scBand').style.left = (50 - w2) + '%'; $('scBand').style.width = (2 * w2) + '%'; drawRoll(); }
+    if (SC.tl) { const w2 = Math.min(50, S.tol); $('scBand').style.left = (50 - w2) + '%'; $('scBand').style.width = (2 * w2) + '%'; refreshScore(); }
     if (fileData) renderFile();
     save();
   }
@@ -838,6 +871,37 @@ function median(arr) {
     });
   }
 
+  // 音声ファイルを10msずつ解析する（ファイル解析・楽譜モードの録音で共通）
+  async function analyzeAudio(file, prog) {
+    const audio = await decode(await file.arrayBuffer());
+    const sr = audio.sampleRate, len = audio.length;
+    let x = audio.getChannelData(0);
+    if (audio.numberOfChannels > 1) {
+      const m = new Float32Array(len);
+      for (let c = 0; c < audio.numberOfChannels; c++) { const ch = audio.getChannelData(c); for (let i = 0; i < len; i++) m[i] += ch[i]; }
+      for (let i = 0; i < len; i++) m[i] /= audio.numberOfChannels;
+      x = m;
+    }
+    const hopS = Math.round(HOP * sr), nFrames = Math.max(0, Math.floor((len - FRAME) / hopS) + 1);
+    const frames = new Array(nFrames);
+    let k = 0, lastYield = performance.now();
+    while (k < nFrames) {
+      const i0 = k * hopS, fr = x.subarray(i0, i0 + FRAME);
+      let sum = 0;
+      for (let i = 0; i < FRAME; i++) sum += fr[i] * fr[i];
+      const db = sum > 0 ? 10 * Math.log10(sum / FRAME) : -120;
+      const p = db >= ANALYZE_DB ? detectPitchYIN(fr, sr) : null;
+      frames[k] = { t: (i0 + FRAME / 2) / sr, f: p ? p.freq : null, db };
+      k++;
+      if (performance.now() - lastYield > 60) {
+        prog.textContent = '解析中… ' + Math.floor(k / nFrames * 100) + '%';
+        await new Promise(r => setTimeout(r, 0));
+        lastYield = performance.now();
+      }
+    }
+    return { dur: len / sr, sr, frames };
+  }
+
   $('fileIn').onchange = async e => {
     const file = e.target.files && e.target.files[0];
     e.target.value = '';
@@ -851,34 +915,9 @@ function median(arr) {
     prog.textContent = '読み込み中…';
     $('fileCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
     try {
-      const audio = await decode(await file.arrayBuffer());
-      const sr = audio.sampleRate, len = audio.length;
-      let x = audio.getChannelData(0);
-      if (audio.numberOfChannels > 1) {
-        const m = new Float32Array(len);
-        for (let c = 0; c < audio.numberOfChannels; c++) { const ch = audio.getChannelData(c); for (let i = 0; i < len; i++) m[i] += ch[i]; }
-        for (let i = 0; i < len; i++) m[i] /= audio.numberOfChannels;
-        x = m;
-      }
-      const hopS = Math.round(HOP * sr), nFrames = Math.max(0, Math.floor((len - FRAME) / hopS) + 1);
-      const frames = new Array(nFrames);
-      let k = 0, lastYield = performance.now();
-      while (k < nFrames) {
-        const i0 = k * hopS, fr = x.subarray(i0, i0 + FRAME);
-        let sum = 0;
-        for (let i = 0; i < FRAME; i++) sum += fr[i] * fr[i];
-        const db = sum > 0 ? 10 * Math.log10(sum / FRAME) : -120;
-        const p = db >= ANALYZE_DB ? detectPitchYIN(fr, sr) : null;
-        frames[k] = { t: (i0 + FRAME / 2) / sr, f: p ? p.freq : null, db };
-        k++;
-        if (performance.now() - lastYield > 60) {
-          prog.textContent = '解析中… ' + Math.floor(k / nFrames * 100) + '%';
-          await new Promise(r => setTimeout(r, 0));
-          lastYield = performance.now();
-        }
-      }
-      fileData = { name: file.name, dur: len / sr, frames };
-      prog.textContent = '長さ ' + fmtTime(len / sr) + '（' + (len / sr).toFixed(1) + '秒）・サンプリング周波数 ' + sr + 'Hz';
+      const { dur, sr, frames } = await analyzeAudio(file, prog);
+      fileData = { name: file.name, dur, frames };
+      prog.textContent = '長さ ' + fmtTime(dur) + '（' + dur.toFixed(1) + '秒）・サンプリング周波数 ' + sr + 'Hz';
       fView.t0 = 0; fView.span = Math.min(10, fileData.dur);
       $('fileBody').style.display = 'block';
       renderFile();
@@ -1240,6 +1279,8 @@ function median(arr) {
   $('scClose').onclick = () => {
     if (running) stop();
     document.body.classList.remove('score');
+    closeScoreFile();
+    $('scSumCard').style.display = 'none';
     SC.tl = null; SC.last = null;
   };
 
@@ -1283,7 +1324,7 @@ function median(arr) {
   $('scPart').onchange = e => { SC.partIdx = parseInt(e.target.value, 10); rebuildScore(); };
   $('scStart').onchange = e => { SC.startIdx = parseInt(e.target.value, 10); resetScoreView(); };
   $('scVerse').onchange = e => { SC.verse = e.target.value; resetScoreView(); };
-  $('scTonic').onchange = e => { SC.tonicMode = e.target.value; drawRoll(); };
+  $('scTonic').onchange = e => { SC.tonicMode = e.target.value; refreshScore(); };
   $('rMinus').onclick = () => { SC.rate = Math.max(50, SC.rate - 5); updateScoreInfo(); resetScoreView(); };
   $('rPlus').onclick = () => { SC.rate = Math.min(150, SC.rate + 5); updateScoreInfo(); resetScoreView(); };
   $('bpmIn').oninput = e => { const v = parseFloat(e.target.value); SC.bpmInput = v >= 20 && v <= 300 ? v : null; updateScoreInfo(); resetScoreView(); };
@@ -1329,16 +1370,21 @@ function median(arr) {
   }
 
   // 図のページ：開始小節から、1ページが5秒以上になるよう小節をまとめる
-  function pageOf(q) {
-    const ms = SC.tl.measures, spq = secPerQ() || 0.75;
-    let i = SC.startIdx, ps = ms[i].start;
+  function pagesList() {
+    const ms = SC.tl.measures, spq = secPerQ() || 0.75, out = [];
+    let i = SC.startIdx;
     while (i < ms.length) {
       let j = i, pe = ms[i].start;
       while (j < ms.length && ((pe - ms[i].start) * spq < 5 || j === i)) { pe = ms[j].start + ms[j].len; j++; }
-      if (q < pe || j >= ms.length) return { q0: ms[i].start, q1: pe, mi: i, mj: j };
+      out.push({ q0: ms[i].start, q1: pe, mi: i, mj: j });
       i = j;
     }
-    return { q0: ps, q1: SC.tl.total, mi: SC.startIdx, mj: ms.length };
+    return out;
+  }
+  function pageOf(q) {
+    const ps = pagesList();
+    for (const p of ps) if (q < p.q1 - 1e-9) return p;
+    return ps[ps.length - 1];
   }
   function drawRoll(qNow) {
     if (!SC.tl) return;
@@ -1350,6 +1396,13 @@ function median(arr) {
     c2.setTransform(dpr, 0, 0, dpr, 0, 0);
     c2.clearRect(0, 0, W, H);
     const pg = pageOf(qNow);
+    const nav = !SC.run && SC.last;
+    $('rollNav').style.display = nav ? 'flex' : 'none';
+    if (nav) {
+      const ps = pagesList(), k = ps.findIndex(p => p.q0 === pg.q0);
+      $('pgInfo').textContent = SC.tl.measures[pg.mi].no + '〜' + SC.tl.measures[pg.mj - 1].no + '小節（' + (k + 1) + '/' + ps.length + '）';
+      $('pgPrev').disabled = k <= 0; $('pgNext').disabled = k >= ps.length - 1;
+    }
     const notes = SC.tl.notes.filter(n => n.end > pg.q0 && n.start < pg.q1);
     const fs = notes.map(n => midiFloat(scoreRefFreq(n)));
     let lo = fs.length ? Math.min(...fs) - 2.5 : 57, hi = fs.length ? Math.max(...fs) + 2.5 : 69;
@@ -1393,15 +1446,17 @@ function median(arr) {
       c2.beginPath(); c2.moveTo(x(a.q), y(a.mf)); c2.lineTo(x(b.q), y(b.mf)); c2.stroke();
     }
     c2.restore(); c2.globalAlpha = 1;
-    // 今の位置
-    if (qNow >= pg.q0 && qNow <= pg.q1) {
+    // 今の位置（録音・終了後の確認では描かない）
+    if ((SC.run || !SC.last) && qNow >= pg.q0 && qNow <= pg.q1) {
       c2.strokeStyle = cssVar('--text'); c2.lineWidth = 2;
       c2.beginPath(); c2.moveTo(x(qNow), top - 12); c2.lineTo(x(qNow), bottom); c2.stroke();
     }
   }
   function resetScoreView() {
     if (!SC.tl) return;
+    if (SC.file) { evaluateScoreFile(); return; }
     SC.last = null;
+    $('scSumCard').style.display = 'none';
     const q = SC.tl.measures[SC.startIdx].start;
     showScoreNote(q);
     $('scStat').textContent = '開始を押すと1小節分カウントしてから進みます';
@@ -1421,6 +1476,8 @@ function median(arr) {
     const tl = SC.tl, m0 = tl.measures[SC.startIdx], spq = secPerQ();
     const beatSec = m0.ts.beatQ * spq, beats = m0.ts.beats;
     const t0 = ctx.currentTime + 0.4;
+    closeScoreFile();
+    $('scSumCard').style.display = 'none';
     SC.run = { spq, t0, beatSec, beats, startTime: t0 + beats * beatSec, q0: m0.start, voice: [], recent: [], noteIdx: -2, stats: new Map() };
     if (SC.click) {
       for (let i = 0; i < beats; i++) {
@@ -1437,7 +1494,10 @@ function median(arr) {
   function endScore(finished) {
     const r = SC.run;
     SC.run = null;
-    if (r) SC.last = { q: finished ? SC.tl.total : r.lastQ || r.q0, voice: r.voice, stats: r.stats };
+    if (r) {
+      SC.last = { q: r.q0, qEnd: finished ? SC.tl.total : (r.lastQ || r.q0), voice: r.voice, stats: r.stats };
+      renderScoreSummary('まとめ（マイク）');
+    }
     $('scBtn').textContent = '開始'; $('scBtn').classList.remove('stop');
     $('scSetup').classList.remove('running');
     setScoreVerdict(null);
@@ -1473,9 +1533,7 @@ function median(arr) {
       const v = Math.abs(c) > SC_WRONG ? 'wrong' : judge(c, S.tol);
       pt.v = v; pt.c = c; pt.ni = idx;
       setScoreVerdict(v, c, noteName(nearestNote(f, S).midi, S.names));
-      let st = R.stats.get(idx);
-      if (!st) R.stats.set(idx, st = { n: 0, sum: 0, ok: 0, wrong: 0 });
-      st.n++; if (v === 'wrong') st.wrong++; else { st.sum += c; if (v === 'ok') st.ok++; }
+      addStat(R.stats, idx, v, c, f);
     } else {
       setScoreVerdict(null); // 休符・音の変わり目は評価しない
     }
@@ -1483,6 +1541,171 @@ function median(arr) {
     drawRoll(q);
   }
   window.addEventListener('resize', () => { if (SC.tl) drawRoll(); });
+
+  /* --- 音ごとの集計 --- */
+  function addStat(stats, idx, v, c, f) {
+    let st = stats.get(idx);
+    if (!st) stats.set(idx, st = { n: 0, sum: 0, ok: 0, wrong: 0, wf: [] });
+    st.n++;
+    if (v === 'wrong') { st.wrong++; if (st.wf.length < 400) st.wf.push(f); }
+    else { st.sum += c; if (v === 'ok') st.ok++; }
+  }
+  // 設定が変わったら結果を作り直す（録音ファイルのときは評価し直す）
+  function refreshScore() {
+    if (SC.file) evaluateScoreFile();
+    else if (SC.last && SC.last.stats && !SC.run) { drawRoll(); renderScoreSummary($('scSumTitle').textContent); }
+    else drawRoll();
+  }
+  function renderScoreSummary(title) {
+    const L = SC.last, tl = SC.tl;
+    if (!L || !L.stats) return;
+    const qa = tl.measures[SC.startIdx].start, qb = L.qEnd;
+    const rows = [], wrongs = [];
+    const T = { sure: { n: 0, ok: 0, wrong: 0, sum: 0, cnt: 0, notes: 0, sung: 0 }, unc: { n: 0, ok: 0, wrong: 0, sum: 0, cnt: 0, notes: 0, sung: 0 } };
+    tl.notes.forEach((nt, idx) => {
+      if (nt.start < qa - 1e-9 || nt.start >= qb - 1e-9) return;
+      const st = L.stats.get(idx), g = nt.conf !== 'high' ? T.unc : T.sure;
+      g.notes++;
+      const mno = tl.measures[nt.mi].no, lyr = lyricOf(nt);
+      if (!st || !st.n) { rows.push({ idx, nt, mno, lyr, none: true }); return; }
+      g.sung++; g.n += st.n; g.ok += st.ok; g.wrong += st.wrong; g.sum += st.sum; g.cnt += st.n - st.wrong;
+      const isWrong = st.wrong / st.n >= 0.5;
+      const mean = st.n - st.wrong > 0 ? st.sum / (st.n - st.wrong) : null;
+      const actual = st.wf.length ? noteName(nearestNote(median(st.wf), S).midi, S.names) : '';
+      rows.push({ idx, nt, mno, lyr, mean, okp: Math.round(st.ok / st.n * 100), isWrong, actual });
+      if (isWrong) wrongs.push({ nt, mno, lyr, actual });
+    });
+    const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '―';
+    const cls = c => Math.abs(c) <= S.tol ? 'okc' : c > 0 ? 'hi' : 'lo';
+    const G = T.sure, mean = G.cnt ? G.sum / G.cnt : null;
+    let h = '<div class="stats">' +
+      '<div class="stat"><div class="k">判定幅（±' + S.tol + '¢）内の割合</div><div class="v okc">' + pct(G.ok, G.n) + '</div></div>' +
+      '<div class="stat"><div class="k">平均のずれ（音が違う部分を除く）</div><div class="v ' + (mean === null ? '' : cls(mean)) + '">' + (mean === null ? '―' : fmtCents(mean)) + '</div></div>' +
+      '<div class="stat"><div class="k">「音が違う」だった音</div><div class="v">' + wrongs.filter(w => w.nt.conf === 'high').length + '音</div></div>' +
+      '<div class="stat"><div class="k">評価できた音</div><div class="v">' + G.sung + ' / ' + G.notes + '</div></div>' +
+      '</div>';
+    if (T.unc.notes) {
+      const U = T.unc;
+      h += '<div class="hint" style="margin-bottom:10px">不確実な音（<span class="q">？</span>）は上の数字に含めず、別に数えています：' + U.notes + '音、判定幅内 ' + pct(U.ok, U.n) +
+        (U.cnt ? '、平均のずれ ' + fmtCents(U.sum / U.cnt) : '') + '</div>';
+    }
+    if (wrongs.length) {
+      h += '<div class="label">「音が違う」だった音</div><ol class="wronglist">' + wrongs.map(w =>
+        '<li>' + w.mno + '小節 <b>' + esc(w.nt.german) + '</b>' + qMark(w.nt) + (w.lyr ? '（' + esc(w.lyr) + '）' : '') + ' → 出ていた音 <b>' + esc(w.actual) + '</b></li>').join('') + '</ol>';
+    }
+    h += '<div class="label">音ごとの平均のずれ（行を押すと図がその場所へ移ります）</div>' +
+      '<table><tr><th>小節</th><th>音名</th><th>歌詞</th><th>平均のずれ</th><th>幅内</th></tr>' +
+      rows.map(r => '<tr class="jump" data-q="' + r.nt.start + '"><td>' + r.mno + '</td><td><b>' + esc(r.nt.german) + '</b>' + qMark(r.nt) + '</td><td>' + esc(r.lyr || '') + '</td>' +
+        (r.none ? '<td>―</td><td>―</td>' :
+          r.isWrong ? '<td class="hi">音が違う</td><td>' + r.okp + '%</td>' :
+          '<td class="' + (r.mean === null ? '' : cls(r.mean)) + '">' + (r.mean === null ? '―' : fmtCents(r.mean)) + '</td><td>' + r.okp + '%</td>') + '</tr>').join('') +
+      '</table><div class="testnote">「―」は声が検出されなかった音です。各音の始まり' + SC_SETTLE + '秒は判定に含めていません。</div>';
+    $('scSumTitle').textContent = title;
+    $('scSum').innerHTML = h;
+    $('scSumCard').style.display = 'block';
+    $('scSum').querySelectorAll('tr.jump').forEach(tr => tr.onclick = () => {
+      SC.last.q = pageOf(parseFloat(tr.dataset.q)).q0; drawRoll();
+      $('roll').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }
+  $('pgPrev').onclick = () => { if (!SC.last) return; const ps = pagesList(), k = ps.findIndex(p => p.q0 === pageOf(SC.last.q).q0); if (k > 0) { SC.last.q = ps[k - 1].q0; drawRoll(); } };
+  $('pgNext').onclick = () => { if (!SC.last) return; const ps = pagesList(), k = ps.findIndex(p => p.q0 === pageOf(SC.last.q).q0); if (k < ps.length - 1) { SC.last.q = ps[k + 1].q0; drawRoll(); } };
+
+  /* --- 録音ファイルと楽譜の照らし合わせ --- */
+  const ONSET_RUN = 0.1;      // 声が続いたとみなす長さ（秒）
+  const ONSET_SHIFT = 0.02;   // 解析の窓の中心と声の出始めの差（秒）
+  function findOnset(frames) {
+    const need = Math.round(ONSET_RUN / HOP);
+    let run = 0;
+    for (let i = 0; i < frames.length; i++) {
+      const fr = frames[i];
+      if (fr.f && fr.db >= S.level) { run++; if (run >= need) return frames[i - need + 1].t - ONSET_SHIFT; }
+      else run = 0;
+    }
+    return null;
+  }
+  function closeScoreFile() {
+    SC.file = null; SC.adj = 0;
+    $('scFileCard').style.display = 'none';
+  }
+  $('scFileClose').onclick = () => { closeScoreFile(); resetScoreView(); };
+  $('scFile').onchange = async e => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file || !SC.tl) return;
+    if (running) stop();
+    closeScoreFile();
+    $('scFileCard').style.display = 'block';
+    $('scAlign').style.display = 'none';
+    $('scSumCard').style.display = 'none';
+    $('scFileName').textContent = file.name;
+    const prog = $('scFileProg');
+    prog.textContent = '読み込み中…';
+    $('scFileCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    try {
+      const r = await analyzeAudio(file, prog);
+      SC.file = { name: file.name, dur: r.dur, frames: r.frames };
+      SC.adj = 0;
+      evaluateScoreFile();
+      $('roll').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch (err) {
+      prog.textContent = '読み込めませんでした。m4a・mp3・wav・aac のファイルか確かめてください。（' + ((err && (err.name || err.message)) || err) + '）';
+    }
+  };
+  const setAdj = v => { SC.adj = Math.round(v * 100) / 100; evaluateScoreFile(); };
+  $('alMinus').onclick = () => setAdj(SC.adj - 0.05);
+  $('alPlus').onclick = () => setAdj(SC.adj + 0.05);
+  $('alReset').onclick = () => setAdj(0);
+
+  function evaluateScoreFile() {
+    const F = SC.file, tl = SC.tl;
+    if (!F || !tl) return;
+    const prog = $('scFileProg');
+    const onset = findOnset(F.frames);
+    if (onset === null) {
+      prog.textContent = '録音から声が見つかりませんでした。設定の音量しきい値を左へ動かすと拾える場合があります。';
+      $('scAlign').style.display = 'none'; $('scSumCard').style.display = 'none';
+      return;
+    }
+    const spq = secPerQ(), mStart = tl.measures[SC.startIdx].start;
+    const first = tl.notes.find(n => n.start >= mStart - 1e-9);
+    const qs = first ? first.start : mStart;
+    const t0 = onset + SC.adj; // この時刻を qs にそろえる
+    prog.textContent = '長さ ' + fmtTime(F.dur) + '・最初の声 ' + onset.toFixed(2) + '秒 → ' + tl.measures[first ? first.mi : SC.startIdx].no + '小節の最初の音（' + (first ? first.german : '') + '）';
+    $('scAlign').style.display = 'block';
+    $('alVal').textContent = (SC.adj > 0 ? '+' : SC.adj < 0 ? '−' : '±') + Math.abs(SC.adj).toFixed(2);
+    $('alInfo').textContent = SC.adj ? '自動の位置から' : '自動の位置';
+    const fr = F.frames, n = fr.length;
+    const v = fr.map(o => (o.f && o.db >= S.level) ? o.f : null);
+    const voice = [], stats = new Map();
+    for (let i = 0; i < n; i++) {
+      const q = qs + (fr[i].t - t0) / spq;
+      if (q < mStart - 1 || q > tl.total + 0.5) continue;
+      if (v[i] === null) { voice.push({ q, gap: true, mf: 0 }); continue; }
+      const idx = noteAt(q);
+      // 中央値は同じ楽譜の音の中だけで取る（隣の音を混ぜない）
+      const w = [];
+      for (let j = Math.max(0, i - 2); j <= Math.min(n - 1, i + 2); j++) {
+        if (v[j] === null) continue;
+        if (noteAt(qs + (fr[j].t - t0) / spq) !== idx) continue;
+        w.push(v[j]);
+      }
+      const f = median(w);
+      const pt = { q, mf: midiFloat(f) };
+      const nt = idx >= 0 ? tl.notes[idx] : null;
+      if (nt && (q - nt.start) * spq >= SC_SETTLE) {
+        const c = 1200 * Math.log2(f / scoreRefFreq(nt));
+        const vv = Math.abs(c) > SC_WRONG ? 'wrong' : judge(c, S.tol);
+        pt.v = vv; pt.c = c;
+        addStat(stats, idx, vv, c, f);
+      }
+      voice.push(pt);
+    }
+    const keepQ = SC.last && SC.last.file ? SC.last.q : mStart;
+    SC.last = { q: keepQ, qEnd: tl.total, voice, stats, file: true };
+    renderScoreSummary('まとめ（' + F.name + '）');
+    drawRoll();
+  }
 
   /* --- 試験用の小さな楽譜データ（楽譜読み取り指示書10章の形） --- */
   function makeTestScore() {
