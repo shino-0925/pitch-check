@@ -103,6 +103,16 @@
   .tonics button { min-height: 48px; border-radius: 12px; border: 2px solid var(--line); background: var(--card); font-size: 16px; font-weight: 600; }
   .tonics button.on { border-color: var(--accent); background: var(--accent); color: #fff; }
   #tonicBox.off { opacity: .4; }
+  .filebtn { display: flex; align-items: center; justify-content: center; margin-top: 12px; cursor: pointer; }
+  .filehead { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 15px; word-break: break-all; }
+  .xbtn { width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); font-size: 22px; flex: none; }
+  canvas#fgraph { width: 100%; height: 200px; display: block; margin-top: 8px; touch-action: pan-y; }
+  .seg.small button { min-height: 44px; font-size: 15px; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0 10px; }
+  .stat { background: var(--bg); border-radius: 12px; padding: 10px 12px; }
+  .stat .k { font-size: 12px; color: var(--sub); }
+  .stat .v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .hi { color: var(--high-fg); } .lo { color: var(--low-fg); } .okc { color: var(--ok-fg); }
   .hint { font-size: 12px; color: var(--sub); margin-top: 6px; line-height: 1.6; }
 
   table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
@@ -155,6 +165,25 @@
       <span>音量</span>
       <div class="meter"><div id="bar" class="bar"></div><div id="thr" class="thr"></div></div>
       <span id="status" class="status">停止中</span>
+    </div>
+    <label class="big sub filebtn" for="fileIn">ファイルを開く</label>
+    <input type="file" id="fileIn" accept="audio/*,.m4a,.mp3,.wav,.aac" style="display:none">
+    <div class="hint">ボイスメモは、共有ボタン →「"ファイル"に保存」でファイルAppに保存してから選びます。</div>
+  </div>
+
+  <!-- 7. ファイル解析 -->
+  <div class="card" id="fileCard" style="display:none">
+    <div class="filehead"><b id="fileName"></b><button class="xbtn" id="fileClose" type="button" aria-label="閉じる">×</button></div>
+    <div id="fileProg" class="hint"></div>
+    <div id="fileBody" style="display:none">
+      <canvas id="fgraph" aria-label="曲全体の音程の推移"></canvas>
+      <div class="glegend"><span id="fpos"></span><span>指で左右に動かせます</span></div>
+      <div class="seg small" id="spanSeg">
+        <button type="button" data-v="10">10秒</button>
+        <button type="button" data-v="30">30秒</button>
+        <button type="button" data-v="0">全体</button>
+      </div>
+      <div id="fsum"></div>
     </div>
   </div>
 
@@ -246,13 +275,8 @@ function detectPitchYIN(buf, sr) {
   const tauMax = Math.min(Math.ceil(sr / (PITCH_MIN_HZ * 0.95)), N - 512); // 下限より少し余裕を持たせる
   const W = N - tauMax - 1;
   if (W < 64) return null;
-  const d = new Float32Array(tauMax + 2);
-  for (let tau = 1; tau <= tauMax + 1; tau++) {
-    let s = 0;
-    for (let i = 0; i < W; i++) { const x = buf[i] - buf[i + tau]; s += x * x; }
-    d[tau] = s;
-  }
-  const cm = new Float32Array(tauMax + 2);
+  const d = yinDifference(buf, W, tauMax + 1);
+  const cm = new Float64Array(tauMax + 2);
   cm[0] = 1;
   let run = 0;
   for (let tau = 1; tau <= tauMax + 1; tau++) { run += d[tau]; cm[tau] = run > 0 ? d[tau] * tau / run : 1; }
@@ -274,6 +298,60 @@ function detectPitchYIN(buf, sr) {
   const freq = sr / (tau + shift);
   if (freq < PITCH_MIN_HZ * 0.97 || freq > PITCH_MAX_HZ * 1.03) return null;
   return { freq, clarity: 1 - cm[tau] };
+}
+
+/* 差分関数 d(τ) = Σ_{i<W} (x[i] − x[i+τ])²  （τ = 0…maxTau）
+   = Σ_{i<W} x[i]² + Σ_{i=τ}^{τ+W−1} x[i]² − 2·Σ_{i<W} x[i]·x[i+τ]
+   最後の相互相関の項をFFTで求め、直接計算より数十倍速くする（結果は同じ） */
+const fftTables = {};
+function getFFT(n) {
+  if (fftTables[n]) return fftTables[n];
+  const rev = new Uint32Array(n), bits = Math.log2(n);
+  for (let i = 0; i < n; i++) { let r = 0; for (let b = 0; b < bits; b++) r |= ((i >> b) & 1) << (bits - 1 - b); rev[i] = r; }
+  const cos = new Float64Array(n / 2), sin = new Float64Array(n / 2);
+  for (let i = 0; i < n / 2; i++) { cos[i] = Math.cos(2 * Math.PI * i / n); sin[i] = -Math.sin(2 * Math.PI * i / n); }
+  return (fftTables[n] = { n, rev, cos, sin, re1: new Float64Array(n), im1: new Float64Array(n), re2: new Float64Array(n), im2: new Float64Array(n) });
+}
+function fftInPlace(T, re, im) {
+  const n = T.n;
+  for (let i = 0; i < n; i++) { const j = T.rev[i]; if (j > i) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
+  for (let size = 2; size <= n; size <<= 1) {
+    const half = size >> 1, step = n / size;
+    for (let start = 0; start < n; start += size) {
+      for (let k = 0; k < half; k++) {
+        const wr = T.cos[k * step], wi = T.sin[k * step];
+        const a = start + k, b = a + half;
+        const xr = re[b] * wr - im[b] * wi, xi = re[b] * wi + im[b] * wr;
+        re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+      }
+    }
+  }
+}
+function yinDifference(buf, W, maxTau) {
+  const N = buf.length;
+  let n = 1; while (n < N + W) n <<= 1;
+  const T = getFFT(n), ar = T.re1, ai = T.im1, xr = T.re2, xi = T.im2;
+  ar.fill(0); ai.fill(0); xr.fill(0); xi.fill(0);
+  for (let i = 0; i < W; i++) ar[i] = buf[i];
+  for (let i = 0; i < N; i++) xr[i] = buf[i];
+  fftInPlace(T, ar, ai);
+  fftInPlace(T, xr, xi);
+  // conj(A)·X の逆FFT（共役を取ってFFTし、もう一度共役）
+  for (let k = 0; k < n; k++) {
+    const r = ar[k] * xr[k] + ai[k] * xi[k];
+    const im = ar[k] * xi[k] - ai[k] * xr[k];
+    xr[k] = r; xi[k] = -im;
+  }
+  fftInPlace(T, xr, xi);
+  const ps = new Float64Array(N + 1);
+  for (let i = 0; i < N; i++) ps[i + 1] = ps[i] + buf[i] * buf[i];
+  const e0 = ps[W];
+  const d = new Float64Array(maxTau + 1);
+  for (let tau = 1; tau <= maxTau; tau++) {
+    const v = e0 + (ps[tau + W] - ps[tau]) - 2 * xr[tau] / n;
+    d[tau] = v > 0 ? v : 0;
+  }
+  return d;
 }
 
 /* ===== 音名とセント（平均律） ===== */
@@ -394,45 +472,62 @@ function median(arr) {
   }
 
   /* --- 推移グラフ --- */
-  const canvas = $('graph'), g = canvas.getContext('2d');
+  const canvas = $('graph');
   let history = []; // {t: 秒, c: セント or null}
   function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
-  function drawGraph() {
+  // pts: [{t, c(セント) or null, weak(音の変わり目)}]、t0〜t1 秒を描く
+  function drawCentGraph(cv, pts, t0, t1, maxGap, timeAxis) {
+    const ctx2 = cv.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
-    const W = canvas.clientWidth, H = canvas.clientHeight;
+    const W = cv.clientWidth, H = cv.clientHeight;
     if (!W) return;
-    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
-      canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
+      cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
     }
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.clearRect(0, 0, W, H);
-    const left = 34, right = W - 4, top = 6, bottom = H - 6;
+    ctx2.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx2.clearRect(0, 0, W, H);
+    const left = 34, right = W - 4, top = 6, bottom = H - (timeAxis ? 20 : 6);
     const y = c => top + (50 - Math.max(-50, Math.min(50, c))) / 100 * (bottom - top);
-    // 判定幅の帯
-    g.fillStyle = cssVar('--ok'); g.globalAlpha = 0.18;
-    g.fillRect(left, y(S.tol), right - left, y(-S.tol) - y(S.tol));
-    g.globalAlpha = 1;
-    // 目盛り
-    g.font = '11px -apple-system, sans-serif'; g.fillStyle = cssVar('--sub'); g.textAlign = 'right'; g.textBaseline = 'middle';
-    g.strokeStyle = cssVar('--line'); g.lineWidth = 1;
+    const x = t => left + (t - t0) / (t1 - t0) * (right - left);
+    ctx2.fillStyle = cssVar('--ok'); ctx2.globalAlpha = 0.18;
+    ctx2.fillRect(left, y(S.tol), right - left, y(-S.tol) - y(S.tol));
+    ctx2.globalAlpha = 1;
+    ctx2.font = '11px -apple-system, sans-serif'; ctx2.fillStyle = cssVar('--sub'); ctx2.textAlign = 'right'; ctx2.textBaseline = 'middle';
+    ctx2.strokeStyle = cssVar('--line'); ctx2.lineWidth = 1;
     for (const c of [50, 25, 0, -25, -50]) {
-      g.beginPath(); g.moveTo(left, y(c)); g.lineTo(right, y(c)); g.stroke();
-      g.fillText((c > 0 ? '+' : c < 0 ? '−' : '') + Math.abs(c), left - 4, y(c));
+      ctx2.beginPath(); ctx2.moveTo(left, y(c)); ctx2.lineTo(right, y(c)); ctx2.stroke();
+      ctx2.fillText((c > 0 ? '+' : c < 0 ? '−' : '') + Math.abs(c), left - 4, y(c));
     }
-    if (!history.length) return;
-    const tNow = history[history.length - 1].t;
-    const x = t => right - (tNow - t) / GRAPH_SEC * (right - left);
-    // 判定ごとに色分けした線
-    g.lineWidth = 3; g.lineCap = 'round';
-    const col = { ok: cssVar('--ok'), high: cssVar('--bad'), low: cssVar('--accent') };
-    for (let i = 1; i < history.length; i++) {
-      const p = history[i - 1], q = history[i];
-      if (p.c === null || q.c === null || q.t - p.t > 0.25 || x(p.t) < left) continue;
-      g.strokeStyle = col[judge(q.c, S.tol)];
-      g.beginPath(); g.moveTo(x(p.t), y(p.c)); g.lineTo(x(q.t), y(q.c)); g.stroke();
+    if (timeAxis) {
+      const span = t1 - t0;
+      const step = [1, 2, 5, 10, 15, 30, 60, 120, 300].find(v => span / v <= 6) || 600;
+      ctx2.textAlign = 'center'; ctx2.textBaseline = 'top';
+      for (let tt = Math.ceil(t0 / step) * step; tt <= t1; tt += step) {
+        ctx2.beginPath(); ctx2.moveTo(x(tt), top); ctx2.lineTo(x(tt), bottom); ctx2.stroke();
+        const xx = x(tt);
+        ctx2.textAlign = xx > right - 14 ? 'right' : 'center';
+        ctx2.fillText(fmtTime(tt), Math.min(xx, right), bottom + 4);
+      }
     }
+    ctx2.save();
+    ctx2.beginPath(); ctx2.rect(left, 0, right - left, H); ctx2.clip();
+    ctx2.lineWidth = 3; ctx2.lineCap = 'round';
+    const col = { ok: cssVar('--ok'), high: cssVar('--bad'), low: cssVar('--accent') }, weak = cssVar('--sub');
+    for (let i = 1; i < pts.length; i++) {
+      const p = pts[i - 1], q = pts[i];
+      if (p.c === null || q.c === null || q.t - p.t > maxGap || q.t < t0 || p.t > t1) continue;
+      ctx2.globalAlpha = q.weak ? 0.35 : 1;
+      ctx2.strokeStyle = q.weak ? weak : col[judge(q.c, S.tol)];
+      ctx2.beginPath(); ctx2.moveTo(x(p.t), y(p.c)); ctx2.lineTo(x(q.t), y(q.c)); ctx2.stroke();
+    }
+    ctx2.restore();
   }
-  window.addEventListener('resize', drawGraph);
+  function fmtTime(t) { const m = Math.floor(t / 60), s = Math.floor(t % 60); return m + ':' + String(s).padStart(2, '0'); }
+  function drawGraph() {
+    const tNow = history.length ? history[history.length - 1].t : GRAPH_SEC;
+    drawCentGraph(canvas, history, tNow - GRAPH_SEC, tNow, 0.25, false);
+  }
+  window.addEventListener('resize', () => { drawGraph(); if (fileData) drawFileGraph(); });
 
   /* --- 設定の反映 --- */
   function applySettings() {
@@ -460,6 +555,7 @@ function median(arr) {
     $('band').style.width = (2 * w) + '%';
     if (lastShown) showNote(lastShown);
     drawGraph();
+    if (fileData) renderFile();
     save();
   }
   const setA = v => { S.A = Math.max(430, Math.min(450, v)); applySettings(); };
@@ -609,6 +705,176 @@ function median(arr) {
   }
 
   btn.onclick = () => { running ? stop() : start(); };
+
+  /* --- 音声ファイル解析 --- */
+  const HOP = 0.01;        // 10msずつずらす
+  const FRAME = 2048;      // 解析の単位
+  const MIN_SEG = 0.1;     // 同じ音がこれより短い部分は音の変わり目として集計しない（秒）
+  const ANALYZE_DB = -70;  // これより小さい音は検出しない（しきい値の下限）
+  let fileData = null;     // { name, dur, frames: [{t, f, db}] }
+  let fileRes = null;      // 設定から計算した結果
+  const fView = { t0: 0, span: 10 };
+
+  function decode(ab) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const dctx = new AC();
+    return new Promise((res, rej) => {
+      let fin = false;
+      const done = (fn, v) => { if (fin) return; fin = true; try { const c = dctx.close(); if (c && c.catch) c.catch(() => {}); } catch (_) {} fn(v); };
+      const p = dctx.decodeAudioData(ab, b => done(res, b), e => done(rej, e || new Error('decode error')));
+      if (p && p.then) p.then(b => done(res, b), e => done(rej, e));
+    });
+  }
+
+  $('fileIn').onchange = async e => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (running) stop();
+    fileData = null; fileRes = null;
+    $('fileCard').style.display = 'block';
+    $('fileBody').style.display = 'none';
+    $('fileName').textContent = file.name;
+    const prog = $('fileProg');
+    prog.textContent = '読み込み中…';
+    $('fileCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    try {
+      const audio = await decode(await file.arrayBuffer());
+      const sr = audio.sampleRate, len = audio.length;
+      let x = audio.getChannelData(0);
+      if (audio.numberOfChannels > 1) {
+        const m = new Float32Array(len);
+        for (let c = 0; c < audio.numberOfChannels; c++) { const ch = audio.getChannelData(c); for (let i = 0; i < len; i++) m[i] += ch[i]; }
+        for (let i = 0; i < len; i++) m[i] /= audio.numberOfChannels;
+        x = m;
+      }
+      const hopS = Math.round(HOP * sr), nFrames = Math.max(0, Math.floor((len - FRAME) / hopS) + 1);
+      const frames = new Array(nFrames);
+      let k = 0, lastYield = performance.now();
+      while (k < nFrames) {
+        const i0 = k * hopS, fr = x.subarray(i0, i0 + FRAME);
+        let sum = 0;
+        for (let i = 0; i < FRAME; i++) sum += fr[i] * fr[i];
+        const db = sum > 0 ? 10 * Math.log10(sum / FRAME) : -120;
+        const p = db >= ANALYZE_DB ? detectPitchYIN(fr, sr) : null;
+        frames[k] = { t: (i0 + FRAME / 2) / sr, f: p ? p.freq : null, db };
+        k++;
+        if (performance.now() - lastYield > 60) {
+          prog.textContent = '解析中… ' + Math.floor(k / nFrames * 100) + '%';
+          await new Promise(r => setTimeout(r, 0));
+          lastYield = performance.now();
+        }
+      }
+      fileData = { name: file.name, dur: len / sr, frames };
+      prog.textContent = '長さ ' + fmtTime(len / sr) + '（' + (len / sr).toFixed(1) + '秒）・サンプリング周波数 ' + sr + 'Hz';
+      fView.t0 = 0; fView.span = Math.min(10, fileData.dur);
+      $('fileBody').style.display = 'block';
+      renderFile();
+    } catch (err) {
+      prog.textContent = '読み込めませんでした。m4a・mp3・wav・aac のファイルか確かめてください。（' + ((err && (err.name || err.message)) || err) + '）';
+    }
+  };
+  $('fileClose').onclick = () => { fileData = null; fileRes = null; $('fileCard').style.display = 'none'; };
+
+  // 設定（基準音・音律・判定幅・しきい値）から結果を計算し直す
+  function computeFile() {
+    const fr = fileData.frames, n = fr.length;
+    const v = fr.map(o => (o.f && o.db >= S.level) ? o.f : null);
+    const pts = new Array(n);
+    for (let i = 0; i < n; i++) {
+      if (v[i] === null) { pts[i] = { t: fr[i].t, c: null }; continue; }
+      const w = [];
+      for (let j = Math.max(0, i - 2); j <= Math.min(n - 1, i + 2); j++) if (v[j] !== null) w.push(v[j]);
+      const f = median(w); // 直近5フレームの中央値（ライブ表示と同じ考え方）
+      const r = nearestNote(f, S);
+      pts[i] = { t: fr[i].t, c: r.cents, midi: r.midi, f };
+    }
+    // 同じ音が続く区間に分け、短い区間（音の移り途中）は集計から外す
+    const minLen = Math.round(MIN_SEG / HOP);
+    let i = 0;
+    while (i < n) {
+      if (pts[i].c === null) { i++; continue; }
+      let j = i;
+      while (j + 1 < n && pts[j + 1].c !== null && pts[j + 1].midi === pts[i].midi) j++;
+      const weak = j - i + 1 < minLen;
+      for (let k = i; k <= j; k++) pts[k].weak = weak;
+      i = j + 1;
+    }
+    const by = new Map();
+    let cnt = 0, inTol = 0, sum = 0, sumAbs = 0, hi = 0, lo = 0;
+    for (const p of pts) {
+      if (p.c === null || p.weak) continue;
+      cnt++; sum += p.c; sumAbs += Math.abs(p.c);
+      const j = judge(p.c, S.tol);
+      if (j === 'ok') inTol++; else if (j === 'high') hi++; else lo++;
+      let o = by.get(p.midi);
+      if (!o) by.set(p.midi, o = { midi: p.midi, n: 0, sum: 0, ok: 0 });
+      o.n++; o.sum += p.c; if (j === 'ok') o.ok++;
+    }
+    return { pts, cnt, inTol, hi, lo, mean: cnt ? sum / cnt : 0, meanAbs: cnt ? sumAbs / cnt : 0,
+      notes: [...by.values()].sort((a, b) => a.midi - b.midi) };
+  }
+
+  function renderFile() {
+    if (!fileData) return;
+    fileRes = computeFile();
+    const R = fileRes, pct = v => R.cnt ? Math.round(v / R.cnt * 100) + '%' : '―';
+    const cls = c => Math.abs(c) <= S.tol ? 'okc' : c > 0 ? 'hi' : 'lo';
+    let h = '<div class="stats">' +
+      '<div class="stat"><div class="k">判定幅（±' + S.tol + '¢）内の割合</div><div class="v okc">' + pct(R.inTol) + '</div></div>' +
+      '<div class="stat"><div class="k">平均のずれ</div><div class="v ' + cls(R.mean) + '">' + (R.cnt ? fmtCents(R.mean) : '―') + '</div></div>' +
+      '<div class="stat"><div class="k">高い／低いの割合</div><div class="v"><span class="hi">' + pct(R.hi) + '</span> / <span class="lo">' + pct(R.lo) + '</span></div></div>' +
+      '<div class="stat"><div class="k">ずれの大きさの平均</div><div class="v">' + (R.cnt ? Math.round(R.meanAbs) + '¢' : '―') + '</div></div>' +
+      '</div>';
+    if (!R.cnt) {
+      h += '<div class="hint">声として解析できた部分がありませんでした。音量しきい値（設定）を左へ動かすと拾える場合があります。</div>';
+    } else {
+      h += '<table><tr><th>音名</th><th>時間</th><th>平均のずれ</th><th>幅内</th></tr>' +
+        R.notes.map(o => {
+          const m = o.sum / o.n;
+          return '<tr><td><b>' + noteName(o.midi, S.names) + '</b>' + (S.names === 'jp' ? ' <span class="hint">' + noteNameEN(o.midi) + '</span>' : '') +
+            '</td><td>' + (o.n * HOP).toFixed(1) + '秒</td><td class="' + cls(m) + '">' + fmtCents(m) + '</td><td>' + Math.round(o.ok / o.n * 100) + '%</td></tr>';
+        }).join('') + '</table>' +
+        '<div class="testnote">声として解析した時間 ' + (R.cnt * HOP).toFixed(1) + '秒。同じ音が' + MIN_SEG + '秒未満の部分（音の移り途中）は集計に含めず、グラフでは灰色で示します。</div>';
+    }
+    $('fsum').innerHTML = h;
+    document.querySelectorAll('#spanSeg button').forEach(b => {
+      const v = parseFloat(b.dataset.v);
+      b.classList.toggle('on', v === 0 ? fView.span >= fileData.dur : Math.abs(fView.span - Math.min(v, fileData.dur)) < 1e-6 && fView.span < fileData.dur);
+    });
+    drawFileGraph();
+  }
+  function drawFileGraph() {
+    if (!fileData || !fileRes) return;
+    fView.span = Math.min(fView.span, fileData.dur);
+    fView.t0 = Math.max(0, Math.min(fileData.dur - fView.span, fView.t0));
+    drawCentGraph($('fgraph'), fileRes.pts, fView.t0, fView.t0 + fView.span, 0.05, true);
+    $('fpos').textContent = fmtTime(fView.t0) + '〜' + fmtTime(fView.t0 + fView.span) + ' / ' + fmtTime(fileData.dur);
+  }
+  document.querySelectorAll('#spanSeg button').forEach(b => b.onclick = () => {
+    if (!fileData) return;
+    const v = parseFloat(b.dataset.v), mid = fView.t0 + fView.span / 2;
+    fView.span = v === 0 ? fileData.dur : Math.min(v, fileData.dur);
+    fView.t0 = mid - fView.span / 2;
+    renderFile();
+  });
+  // 指で横に動かす
+  (function () {
+    const cv = $('fgraph');
+    let sx = null, st0 = 0, sy = 0, horiz = null;
+    cv.addEventListener('pointerdown', e => { sx = e.clientX; sy = e.clientY; st0 = fView.t0; horiz = null; });
+    cv.addEventListener('pointermove', e => {
+      if (sx === null || !fileData) return;
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (horiz === null && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) horiz = Math.abs(dx) > Math.abs(dy);
+      if (!horiz) return;
+      e.preventDefault();
+      fView.t0 = st0 - dx / Math.max(1, cv.clientWidth - 38) * fView.span;
+      drawFileGraph();
+    });
+    const end = () => { sx = null; };
+    cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end); cv.addEventListener('pointerleave', end);
+  })();
   document.addEventListener('visibilitychange', () => { if (document.hidden && running) stop(); });
 
   /* --- 内部テスト：内部で作ったサイン波を解析（音は鳴らさない） --- */
