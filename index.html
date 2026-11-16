@@ -346,7 +346,12 @@
       <label class="big sub filebtn" for="ldFile" style="margin-top:0">JSONファイルを選ぶ</label>
       <input type="file" id="ldFile" accept="application/json,.json,.txt" style="display:none">
       <div class="label" style="margin-top:14px">または、JSONの文字を貼り付け</div>
+      <div class="seg small" style="margin-bottom:8px">
+        <button type="button" id="ldPaste">貼り付け</button>
+        <button type="button" id="ldClear">クリア</button>
+      </div>
       <textarea id="ldText" rows="6" placeholder='{"title": …, "parts": [ … ]}'></textarea>
+      <div class="hint" id="ldTextInfo"></div>
       <button id="ldGo" class="big" type="button" style="margin-top:10px">貼り付けた文字を読み込む</button>
     </div>
     <div class="card">
@@ -1326,6 +1331,30 @@ function median(arr) {
     loadScoreText(await f.text(), f.name);
   };
   $('ldGo').onclick = () => loadScoreText($('ldText').value, '貼り付けたデータ');
+  function updateTextInfo(msg) {
+    const n = $('ldText').value.length;
+    $('ldTextInfo').textContent = msg || (n ? n.toLocaleString() + '文字' : '');
+  }
+  $('ldText').oninput = () => updateTextInfo();
+  // クリップボードの文字を貼り付ける（iPhoneでは「ペースト」の確認が出ることがある）
+  $('ldPaste').onclick = async () => {
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.readText) throw new Error('unsupported');
+      const t = await navigator.clipboard.readText();
+      if (!t) { updateTextInfo('クリップボードが空です'); return; }
+      $('ldText').value = t;
+      $('ldErr').textContent = '';
+      updateTextInfo();
+    } catch (e) {
+      $('ldText').focus();
+      updateTextInfo('自動で貼り付けられませんでした。欄を長押しして「ペースト」を選んでください。');
+    }
+  };
+  $('ldClear').onclick = () => {
+    $('ldText').value = '';
+    $('ldErr').textContent = '';
+    updateTextInfo();
+  };
   $('ldTest').onclick = () => loadScoreText(JSON.stringify(makeTestScore()), '試験用データ');
   $('scClose').onclick = () => {
     if (running) stop();
