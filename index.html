@@ -1305,6 +1305,7 @@ function median(arr) {
         if (isNum(c.toBpm) && c.toBpm > 0) ch.toBpm = c.toBpm;
         else warnOnce('toBpm', 'rit.／accel. に終わりのテンポ（toBpm）がないものは、2割遅く／速くします');
       }
+      if (c.confirmed === false) warnOnce('tcc', 'テンポの変化に、楽譜読み取りで目安として入れた値（未確認）があります');
       changes.push(ch);
     });
     for (const f of fermatas) if (!changes.some(c => c.type === 'fermata' && c.measure === f.measure && Math.abs(c.offset - f.offset) < 1e-6)) changes.push(f);
