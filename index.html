@@ -128,6 +128,18 @@
   #gdMode button { font-size: 14px; padding: 0 2px; }
   .notice { margin-top: 10px; font-size: 13px; line-height: 1.7; background: var(--bg); border-radius: 12px; padding: 10px 12px; }
   .notice:empty { display: none; }
+  .tmbox { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 4px 0 14px; padding: 12px 0 6px; }
+  .tmrow { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--line); font-size: 15px; }
+  .tmrow .tx { flex: 1; line-height: 1.5; }
+  .tmrow .tx small { color: var(--sub); }
+  .tmrow button { min-width: 52px; height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); font-size: 14px; }
+  .tmedit { background: var(--bg); border-radius: 12px; padding: 12px; margin: 8px 0; }
+  .tmedit .srow { margin-bottom: 8px; }
+  .tmedit .srow { flex-wrap: wrap; row-gap: 4px; }
+  .tmedit .slabel { width: 100%; }
+  #tmType { display: grid; grid-template-columns: 1fr 1fr; }
+  .unit { font-size: 14px; color: var(--sub); flex: none; }
+  .tmfoot { display: flex; justify-content: space-between; }
   .sm { display: none; }
   body.score .sm { display: block; }
   body.score .nm { display: none !important; }
@@ -241,15 +253,52 @@
       <button type="button" data-v="sing">ガイドと歌う</button>
     </div>
     <div class="srow"><span class="slabel">練習するパート</span><select id="scPart"></select></div>
-    <div class="srow"><span class="slabel">テンポ</span>
+    <div class="srow"><span class="slabel">最初のテンポ</span>
+      <input type="number" id="bpmIn" inputmode="decimal" min="20" max="300" step="any" placeholder="例：72"></div>
+    <div class="srow"><span class="slabel">テンポ倍率</span>
       <div class="stepper small">
         <button class="step" id="rMinus" type="button" aria-label="遅く">−</button>
         <div class="val"><span id="rVal">100</span><small>%</small><div class="hint" id="bpmShow"></div></div>
         <button class="step" id="rPlus" type="button" aria-label="速く">＋</button>
       </div>
     </div>
-    <div class="srow" id="bpmRow" style="display:none"><span class="slabel">bpm（♩）</span>
-      <input type="number" id="bpmIn" inputmode="numeric" min="20" max="300" placeholder="例：72"></div>
+    <div class="tmbox">
+      <div class="label">テンポの変化</div>
+      <div id="tmList"></div>
+      <div class="tmedit" id="tmEdit" style="display:none">
+        <div class="seg small" id="tmType" style="margin-bottom:10px">
+          <button type="button" data-v="set">切り替え</button>
+          <button type="button" data-v="rit">rit.</button>
+          <button type="button" data-v="accel">accel.</button>
+          <button type="button" data-v="fermata">𝄐 フェルマータ</button>
+        </div>
+        <div class="srow"><span class="slabel" id="tmPosLabel">始まり</span>
+          <select id="tmM" aria-label="小節"></select>
+          <input type="number" id="tmB" inputmode="decimal" min="1" step="0.5" value="1" aria-label="拍" style="flex:0 0 5.2em"><span class="unit">拍</span></div>
+        <div class="srow tm-set"><span class="slabel">新しいテンポ（♩=）</span>
+          <input type="number" id="tmBpm" inputmode="decimal" min="20" max="300" step="any" placeholder="例：60"></div>
+        <div class="srow tm-ramp"><span class="slabel">終わり</span>
+          <select id="tmEM" aria-label="終わりの小節"></select>
+          <input type="number" id="tmEB" inputmode="decimal" min="0.5" step="0.5" placeholder="最後" aria-label="終わりの拍" style="flex:0 0 5.2em"><span class="unit">拍まで</span></div>
+        <div class="srow tm-ramp"><span class="slabel">終わりのテンポ（♩=）</span>
+          <input type="number" id="tmTo" inputmode="decimal" min="20" max="300" step="any" placeholder="空欄で自動"></div>
+        <div class="srow tm-ferm"><span class="slabel">のばす倍率</span>
+          <input type="number" id="tmF" inputmode="decimal" min="1" max="8" step="0.5" value="2"></div>
+        <div class="srow"><span class="slabel">メモ</span>
+          <input type="text" id="tmText" placeholder="例：Meno mosso、a tempo"></div>
+        <div class="hint" id="tmEditHint"></div>
+        <div class="seg small" style="margin-top:10px">
+          <button type="button" id="tmCancel">やめる</button>
+          <button type="button" id="tmSave" class="on">保存</button>
+        </div>
+      </div>
+      <button type="button" class="big sub" id="tmAdd" style="min-height:48px;font-size:16px;margin-top:6px">＋ テンポの変化を追加</button>
+      <div class="tmfoot">
+        <button class="reset" id="tmReset" type="button">楽譜データの値に戻す</button>
+        <button class="reset" id="tmCopy" type="button">JSONの形でコピー</button>
+      </div>
+      <div class="hint" id="tmNote"></div>
+    </div>
     <div class="srow"><span class="slabel">開始位置</span><select id="scStart"></select></div>
     <div class="srow" id="verseRow"><span class="slabel">歌詞</span><select id="scVerse"></select></div>
     <div class="srow"><span class="slabel">主音（純正律）</span><select id="scTonic"></select></div>
@@ -356,7 +405,7 @@
     </div>
     <div class="card">
       <button id="ldTest" class="big sub" type="button">試験用データを読み込む</button>
-      <div class="hint">4小節・ソプラノとテノールの小さな楽譜です（ヘ長調→4小節目からハ長調、タイ・休符・不確実な音を含む）。</div>
+      <div class="hint">4小節・ソプラノとテノールの小さな楽譜です（ヘ長調→4小節目からハ長調、タイ・休符・不確実な音、3小節目後半のrit.・4小節目のa tempo・最後の音のフェルマータを含む）。</div>
     </div>
     <div class="card err" id="ldErr"></div>
   </div>
@@ -1131,7 +1180,7 @@ function median(arr) {
   /* ===================== 楽譜モード ===================== */
   const SC = {
     data: null,        // 検査済みの楽譜データ
-    partIdx: 0, rate: 100, bpmInput: null, startIdx: 0, verse: '1', tonicMode: 'auto', click: false,
+    partIdx: 0, rate: 100, baseBpm: null, changes: [], tm: null, startIdx: 0, verse: '1', tonicMode: 'auto', click: false,
     tl: null,          // 選んだパートの時間軸
     run: null,         // 進行中の状態
     pending: false,    // マイクの準備ができたら開始する
@@ -1186,7 +1235,7 @@ function median(arr) {
     const warnOnce = (k, msg) => { if (!warnSet.has(k)) { warnSet.add(k); warns.push(msg); } };
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { errors: ['JSONの一番外側が { } のオブジェクトではありません'], warns };
     if (!Array.isArray(obj.parts) || !obj.parts.length) return { errors: ['parts（パートの一覧）がありません'], warns };
-    const parts = [], verses = new Set(), allNos = new Set();
+    const parts = [], verses = new Set(), allNos = new Set(), fermatas = [];
     obj.parts.forEach((pt, pi) => {
       const pname = (pt && (pt.name || pt.id)) || ('パート' + (pi + 1));
       if (!pt || typeof pt !== 'object') { errors.push('parts[' + pi + '] がオブジェクトではありません'); return; }
@@ -1212,6 +1261,7 @@ function median(arr) {
           if (!isNum(off)) { off = ev.offset; if (isNum(off)) warnOnce('poff', 'performedOffset がない音は offset（記譜上の位置）で代用します'); }
           if (!isNum(ql)) { ql = ev.quarterLength; if (isNum(ql)) warnOnce('pql', 'performedQuarterLength がない音は quarterLength（記譜上の長さ）で代用します'); }
           if (!isNum(off) || !isNum(ql)) { errors.push(where + '：performedOffset・performedQuarterLength（位置と長さ）がありません'); return; }
+          if (ev.fermata) fermatas.push({ type: 'fermata', measure: no, offset: off, factor: isNum(ev.fermata) && ev.fermata >= 1 ? ev.fermata : 2, src: 'json' });
           if (ev.type === 'rest') { evs.push({ rest: true, off, ql }); return; }
           let midi = isNum(ev.midi) ? ev.midi : pitchToMidi(ev.pitch);
           if (!isNum(ev.midi) && midi !== null) warnOnce('midi', 'midi がない音は pitch から計算します');
@@ -1234,11 +1284,35 @@ function median(arr) {
       const bad = order.filter(n => !allNos.has(n));
       if (bad.length) errors.push('structure.playbackOrder に、データにない小節番号があります：' + bad.join(', '));
     }
+    // テンポの変化（tempoChanges）を読む。おかしい項目は使わずに注意として出す
+    const changes = [];
+    if (obj.tempoChanges !== undefined && !Array.isArray(obj.tempoChanges)) warnOnce('tc', 'tempoChanges が一覧（[ ]）ではないため使いません');
+    (Array.isArray(obj.tempoChanges) ? obj.tempoChanges : []).forEach((c, i) => {
+      const where = 'tempoChanges[' + i + ']';
+      if (!c || typeof c !== 'object') { warns.push(where + ' が読めないため使いません'); return; }
+      const type = c.type || (isNum(c.bpm) ? 'set' : null);
+      if (!['set', 'rit', 'accel', 'fermata'].includes(type)) { warns.push(where + '：type（set／rit／accel／fermata）がないため使いません'); return; }
+      if (!isNum(c.measure) || !allNos.has(c.measure)) { warns.push(where + '：measure（小節番号）がデータにないため使いません'); return; }
+      const ch = { type, measure: c.measure, offset: isNum(c.offset) && c.offset >= 0 ? c.offset : 0, text: c.text || '', src: 'json' };
+      if (type === 'set') {
+        if (!isNum(c.bpm) || c.bpm <= 0) { warns.push(where + '：bpm がないため使いません'); return; }
+        ch.bpm = c.bpm;
+      } else if (type === 'fermata') {
+        ch.factor = isNum(c.factor) && c.factor >= 1 ? c.factor : 2;
+      } else {
+        ch.endMeasure = isNum(c.endMeasure) && allNos.has(c.endMeasure) ? c.endMeasure : c.measure;
+        if (isNum(c.endOffset) && c.endOffset > 0) ch.endOffset = c.endOffset;
+        if (isNum(c.toBpm) && c.toBpm > 0) ch.toBpm = c.toBpm;
+        else warnOnce('toBpm', 'rit.／accel. に終わりのテンポ（toBpm）がないものは、2割遅く／速くします');
+      }
+      changes.push(ch);
+    });
+    for (const f of fermatas) if (!changes.some(c => c.type === 'fermata' && c.measure === f.measure && Math.abs(c.offset - f.offset) < 1e-6)) changes.push(f);
     const bpm = obj.tempo && isNum(obj.tempo.bpm) && obj.tempo.bpm > 0 ? obj.tempo.bpm : null;
     if (!bpm) warnOnce('bpm', 'tempo.bpm（テンポ）がないため、画面で入力してください');
     else if (obj.tempo.confirmed === false) warnOnce('bpmc', 'テンポ（♩=' + bpm + '）は楽譜読み取りで未確認の値です');
     return { errors, warns, score: errors.length ? null : {
-      title: obj.title || '（曲名なし）', composer: obj.composer || '', bpm, parts, order,
+      title: obj.title || '（曲名なし）', composer: obj.composer || '', bpm, parts, order, changes,
       verses: [...verses].sort(), uncertain: Array.isArray(obj.uncertain) ? obj.uncertain.length : 0 } };
   }
 
@@ -1279,8 +1353,110 @@ function median(arr) {
     return { measures, notes, total: pos };
   }
 
-  function curBpm() { return SC.data.bpm || SC.bpmInput; }
-  function secPerQ() { return 60 / (curBpm() * SC.rate / 100); }
+  function curBpm() { return SC.baseBpm; }
+
+  /* ===== テンポ地図：楽譜の位置（4分音符＝1）と時間（秒）を行き来する =====
+     切り替え（set）はその位置から新しいテンポ、rit.／accel. は範囲内でテンポを直線的に変え、
+     フェルマータはその音の長さだけ時間を倍率分のばす。テンポ倍率（%）は全体に掛ける。 */
+  function measureTS(no) {
+    const m = SC.tl.measures.find(x => x.no === no);
+    return m ? m.ts : parseTS('4/4');
+  }
+  function fermataLen(no, offset) { // その位置から始まる音・休符の長さ（全パートの最大）
+    let len = 0;
+    for (const p of SC.data.parts) {
+      const m = p.measures.get(no);
+      if (!m) continue;
+      for (const e of m.events) if (Math.abs(e.off - offset) < 1e-6) len = Math.max(len, e.ql);
+    }
+    return len || measureTS(no).beatQ;
+  }
+  function buildTempoMap() {
+    const tl = SC.tl, rate = SC.rate / 100, base = SC.baseBpm || 60;
+    const evs = [], fers = [];
+    const firstNo = tl.measures.length ? tl.measures[0].no : null;
+    tl.measures.forEach((m, k) => {
+      // 曲の最初の小節に戻ったとき（リピート）は最初のテンポに戻す
+      if (m.no === firstNo && !SC.changes.some(c => c.type === 'set' && c.measure === m.no && c.offset < 1e-9)) evs.push({ q: m.start, type: 'set', bpm: base });
+      for (const c of SC.changes) {
+        if (c.measure !== m.no) continue;
+        const q = m.start + Math.min(c.offset, m.len);
+        if (c.type === 'set') evs.push({ q, type: 'set', bpm: c.bpm });
+        else if (c.type === 'fermata') fers.push({ q, len: fermataLen(m.no, c.offset), f: c.factor || 2 });
+        else {
+          const em = c.endMeasure === undefined ? m.no : c.endMeasure;
+          let qe = null;
+          for (let j = k; j < tl.measures.length; j++) {
+            const mj = tl.measures[j];
+            if (mj.no !== em) continue;
+            const e = mj.start + Math.min(c.endOffset === undefined ? mj.len : c.endOffset, mj.len);
+            if (e > q + 1e-9) { qe = e; break; }
+          }
+          if (qe === null) qe = m.start + m.len;
+          evs.push({ q, type: 'ramp', qe, to: c.toBpm, dir: c.type });
+        }
+      }
+    });
+    evs.sort((a, b) => a.q - b.q || (a.type === 'set' ? -1 : 1));
+    const segs = [];
+    let cur = base, q = 0;
+    const push = (q0, q1, b0, b1) => { if (q1 > q0 + 1e-9) segs.push({ q0, q1, b0, b1, f: 1 }); };
+    for (const e of evs) {
+      if (e.q < q - 1e-9) { // 前の rit.／accel. の途中で次の変化が来たら、そこで打ち切る
+        const sg = segs[segs.length - 1];
+        if (sg && sg.q1 > e.q && sg.q0 < e.q) { const b = sg.b0 + (sg.b1 - sg.b0) * (e.q - sg.q0) / (sg.q1 - sg.q0); sg.q1 = e.q; sg.b1 = b; cur = b; }
+        q = e.q;
+      }
+      push(q, e.q, cur, cur); q = Math.max(q, e.q);
+      if (e.type === 'set') cur = e.bpm;
+      else { const to = e.to || cur * (e.dir === 'rit' ? 0.8 : 1.2); push(q, e.qe, cur, to); cur = to; q = e.qe; }
+    }
+    push(q, Math.max(q, tl.total), cur, cur);
+    if (!segs.length) segs.push({ q0: 0, q1: Math.max(tl.total, 1), b0: base, b1: base, f: 1 });
+    // フェルマータの範囲で区切って、時間を倍率分のばす
+    const split = x => {
+      const i = segs.findIndex(sg => sg.q0 < x - 1e-9 && sg.q1 > x + 1e-9);
+      if (i < 0) return;
+      const sg = segs[i], b = sg.b0 + (sg.b1 - sg.b0) * (x - sg.q0) / (sg.q1 - sg.q0);
+      segs.splice(i, 1, { q0: sg.q0, q1: x, b0: sg.b0, b1: b, f: sg.f }, { q0: x, q1: sg.q1, b0: b, b1: sg.b1, f: sg.f });
+    };
+    for (const fe of fers) {
+      split(fe.q); split(fe.q + fe.len);
+      for (const sg of segs) if (sg.q0 >= fe.q - 1e-9 && sg.q1 <= fe.q + fe.len + 1e-9) { sg.f *= fe.f; sg.ferm = true; }
+    }
+    // 各区間の始まりの時刻
+    const segDur = (sg, q1) => {
+      const k = (sg.b1 - sg.b0) / (sg.q1 - sg.q0), dq = q1 - sg.q0;
+      if (Math.abs(k) < 1e-12) return dq * 60 * sg.f / (sg.b0 * rate);
+      return 60 * sg.f / (rate * k) * Math.log((sg.b0 + k * dq) / sg.b0);
+    };
+    let t = 0;
+    for (const sg of segs) { sg.t0 = t; t += segDur(sg, sg.q1); sg.t1 = t; }
+    const findQ = x => { let lo = 0, hi = segs.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (segs[m].q0 <= x) lo = m; else hi = m - 1; } return segs[lo]; };
+    const findT = x => { let lo = 0, hi = segs.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (segs[m].t0 <= x) lo = m; else hi = m - 1; } return segs[lo]; };
+    const first = segs[0], last = segs[segs.length - 1];
+    return {
+      segs,
+      tAt(x) {
+        if (x <= first.q0) return (x - first.q0) * 60 * first.f / (first.b0 * rate);
+        if (x >= last.q1) return last.t1 + (x - last.q1) * 60 / (last.b1 * rate);
+        const sg = findQ(x); return sg.t0 + segDur(sg, x);
+      },
+      qAt(tt) {
+        if (tt <= 0) return first.q0 + tt * first.b0 * rate / (60 * first.f);
+        if (tt >= last.t1) return last.q1 + (tt - last.t1) * last.b1 * rate / 60;
+        const sg = findT(tt), dt = tt - sg.t0, k = (sg.b1 - sg.b0) / (sg.q1 - sg.q0);
+        if (Math.abs(k) < 1e-12) return sg.q0 + dt * sg.b0 * rate / (60 * sg.f);
+        return sg.q0 + (sg.b0 * Math.exp(dt * rate * k / (60 * sg.f)) - sg.b0) / k;
+      },
+      bpmAt(x) { // 倍率を掛けた実際のテンポ
+        const sg = x >= last.q1 ? last : findQ(Math.max(x, first.q0));
+        const b = sg.b0 + (sg.b1 - sg.b0) * Math.min(1, Math.max(0, (x - sg.q0) / (sg.q1 - sg.q0)));
+        return { bpm: b * rate, ferm: !!sg.ferm && x < sg.q1, ramp: Math.abs(sg.b1 - sg.b0) > 1e-9 && x < sg.q1 };
+      }
+    };
+  }
+  function refreshTempo() { SC.tm = SC.baseBpm ? buildTempoMap() : null; }
 
   // 楽譜の音の正しい周波数（平均律／純正律）
   function scoreRefFreq(n) {
@@ -1317,7 +1493,8 @@ function median(arr) {
     }
     if (running) stop();
     SC.data = r.score; SC.warns = r.warns; SC.label = label;
-    SC.partIdx = 0; SC.rate = 100; SC.startIdx = 0; SC.tonicMode = 'auto'; SC.bpmInput = null; SC.last = null;
+    SC.partIdx = 0; SC.rate = 100; SC.startIdx = 0; SC.tonicMode = 'auto'; SC.last = null;
+    loadTempoEdits();
     SC.verse = r.score.verses[0] || '1';
     openLoader(false);
     document.body.classList.add('score');
@@ -1374,7 +1551,6 @@ function median(arr) {
     sel($('scVerse'), sc.verses.map(v => [v, v + '番']), SC.verse);
     $('verseRow').style.display = sc.verses.length > 1 ? 'flex' : 'none';
     sel($('scTonic'), [['auto', '楽譜の調に従う']].concat(KEY_DE.map((k, i) => [i, k + '（固定）'])), SC.tonicMode);
-    $('bpmRow').style.display = sc.bpm ? 'none' : 'flex';
     rebuildScore();
   }
   function rebuildScore() {
@@ -1394,7 +1570,10 @@ function median(arr) {
     const bpm = curBpm();
     $('rVal').textContent = SC.rate;
     $('rMinus').disabled = SC.rate <= 50; $('rPlus').disabled = SC.rate >= 150;
-    $('bpmShow').textContent = bpm ? '♩=' + Math.round(bpm * SC.rate / 100) + (SC.rate !== 100 ? '（元 ' + bpm + '）' : '') : 'bpmを入力';
+    refreshTempo();
+    $('bpmShow').textContent = bpm ? (SC.rate !== 100 ? '最初 ♩=' + fmtBpm(bpm * SC.rate / 100) : '') : 'テンポを入力';
+    if (document.activeElement !== $('bpmIn')) $('bpmIn').value = bpm || '';
+    renderTempoList();
     const unc = SC.tl.notes.filter(n => n.conf !== 'high').length;
     $('scSub').textContent = SC.label + '・' + part.name + '・' + SC.tl.notes.length + '音' + (unc ? '（不確実 ' + unc + '）' : '') +
       (SC.warns && SC.warns.length ? '\n注意：' + SC.warns.join('／') : '');
@@ -1409,8 +1588,128 @@ function median(arr) {
   $('scTonic').onchange = e => { SC.tonicMode = e.target.value; refreshScore(); };
   $('rMinus').onclick = () => { SC.rate = Math.max(50, SC.rate - 5); updateScoreInfo(); resetScoreView(); };
   $('rPlus').onclick = () => { SC.rate = Math.min(150, SC.rate + 5); updateScoreInfo(); resetScoreView(); };
-  $('bpmIn').oninput = e => { const v = parseFloat(e.target.value); SC.bpmInput = v >= 20 && v <= 300 ? v : null; updateScoreInfo(); resetScoreView(); };
+  $('bpmIn').oninput = e => { const v = parseFloat(e.target.value); SC.baseBpm = v >= 20 && v <= 300 ? v : null; saveTempoEdits(); updateScoreInfo(); resetScoreView(); };
   document.querySelectorAll('#clickSeg button').forEach(b => b.onclick = () => { SC.click = b.dataset.v === '1'; updateScoreInfo(); });
+
+  /* --- テンポの変化の編集 --- */
+  const fmtBpm = b => (Math.round(b * 10) / 10).toString();
+  const TYPE_TX = { set: '切り替え', rit: 'rit.', accel: 'accel.', fermata: 'フェルマータ' };
+  function tempoKey() { return 'pc_tempo:' + SC.data.title + '|' + SC.data.parts.map(p => p.name).join(',') + '|' + SC.data.order.length; }
+  function loadTempoEdits() {
+    SC.baseBpm = SC.data.bpm; SC.changes = SC.data.changes.map(c => Object.assign({}, c)); SC.tempoEdited = false;
+    try {
+      const sv = JSON.parse(localStorage.getItem(tempoKey()) || 'null');
+      if (sv && Array.isArray(sv.changes)) { SC.baseBpm = sv.bpm || SC.data.bpm; SC.changes = sv.changes; SC.tempoEdited = true; }
+    } catch (_) {}
+    SC.editIdx = null;
+  }
+  function saveTempoEdits() {
+    SC.tempoEdited = true;
+    try { localStorage.setItem(tempoKey(), JSON.stringify({ bpm: SC.baseBpm, changes: SC.changes })); } catch (_) {}
+  }
+  function orderIndexOf(no) { const i = SC.data.order.indexOf(no); return i < 0 ? 1e9 : i; }
+  function beatOf(no, offset) { return Math.round((offset / measureTS(no).beatQ + 1) * 100) / 100; }
+  function describeChange(c) {
+    const pos = c.measure + '小節' + beatOf(c.measure, c.offset) + '拍';
+    if (c.type === 'set') return pos + '〜　♩=' + fmtBpm(c.bpm);
+    if (c.type === 'fermata') return pos + '　𝄐 フェルマータ ×' + (c.factor || 2);
+    const em = c.endMeasure === undefined ? c.measure : c.endMeasure;
+    const eb = c.endOffset === undefined ? '最後' : Math.round(c.endOffset / measureTS(em).beatQ * 100) / 100 + '拍';
+    return pos + '〜' + em + '小節' + eb + 'まで　' + TYPE_TX[c.type] + ' → ' + (c.toBpm ? '♩=' + fmtBpm(c.toBpm) : (c.type === 'rit' ? '2割遅く' : '2割速く'));
+  }
+  function renderTempoList() {
+    const list = SC.changes.map((c, i) => ({ c, i })).sort((a, b) => orderIndexOf(a.c.measure) - orderIndexOf(b.c.measure) || a.c.offset - b.c.offset);
+    $('tmList').innerHTML = list.length ? list.map(({ c, i }) =>
+      '<div class="tmrow"><div class="tx">' + esc(describeChange(c)) + (c.text ? '<br><small>' + esc(c.text) + '</small>' : '') + '</div>' +
+      '<button type="button" data-e="' + i + '">編集</button><button type="button" data-d="' + i + '">削除</button></div>').join('')
+      : '<div class="hint" style="margin:0 0 6px">なし（最後まで最初のテンポ）</div>';
+    $('tmList').querySelectorAll('[data-e]').forEach(b => b.onclick = () => openTempoEditor(+b.dataset.e));
+    $('tmList').querySelectorAll('[data-d]').forEach(b => b.onclick = () => { SC.changes.splice(+b.dataset.d, 1); SC.editIdx = null; $('tmEdit').style.display = 'none'; afterTempoChange(); });
+    $('tmReset').style.visibility = SC.tempoEdited ? 'visible' : 'hidden';
+    $('tmNote').textContent = SC.tempoEdited ? 'この曲のテンポは画面で修正しています（この端末に保存）。' : '';
+  }
+  function afterTempoChange() { saveTempoEdits(); GD.cache = null; updateScoreInfo(); resetScoreView(); }
+  let tmType = 'set';
+  function setTmType(t) {
+    tmType = t;
+    document.querySelectorAll('#tmType button').forEach(b => b.classList.toggle('on', b.dataset.v === t));
+    document.querySelectorAll('.tm-set').forEach(e => e.style.display = t === 'set' ? 'flex' : 'none');
+    document.querySelectorAll('.tm-ramp').forEach(e => e.style.display = (t === 'rit' || t === 'accel') ? 'flex' : 'none');
+    document.querySelectorAll('.tm-ferm').forEach(e => e.style.display = t === 'fermata' ? 'flex' : 'none');
+    $('tmPosLabel').textContent = t === 'fermata' ? '位置' : '始まり';
+    $('tmEditHint').textContent = t === 'set' ? 'その位置から、新しいテンポにすぐ変わります（Meno mosso、a tempo など）。' :
+      t === 'fermata' ? 'その位置から始まる音（全パートで一番長い音・休符）の長さを、倍率の分だけのばします。' :
+      '始まりから終わりまで、だんだんテンポを変えます。終わったあとは次の変化まで終わりのテンポのままです。終わりのテンポが空欄なら2割' + (t === 'rit' ? '遅く' : '速く') + 'します。';
+  }
+  document.querySelectorAll('#tmType button').forEach(b => b.onclick = () => setTmType(b.dataset.v));
+  function openTempoEditor(idx) {
+    SC.editIdx = idx;
+    const nos = [...new Set(SC.data.order)].sort((a, b) => a - b);
+    const opts = nos.map(n => '<option value="' + n + '">' + n + '小節</option>').join('');
+    $('tmM').innerHTML = opts; $('tmEM').innerHTML = opts;
+    const c = idx === null ? null : SC.changes[idx];
+    const curM = SC.tl.measures[SC.startIdx] ? SC.tl.measures[SC.startIdx].no : nos[0];
+    setTmType(c ? c.type : 'set');
+    $('tmM').value = c ? c.measure : curM;
+    $('tmB').value = c ? beatOf(c.measure, c.offset) : 1;
+    $('tmBpm').value = c && c.bpm ? c.bpm : '';
+    $('tmEM').value = c && c.endMeasure !== undefined ? c.endMeasure : (c ? c.measure : curM);
+    $('tmEB').value = c && c.endOffset !== undefined ? Math.round(c.endOffset / measureTS(c.endMeasure === undefined ? c.measure : c.endMeasure).beatQ * 100) / 100 : '';
+    $('tmTo').value = c && c.toBpm ? c.toBpm : '';
+    $('tmF').value = c && c.factor ? c.factor : 2;
+    $('tmText').value = c && c.text ? c.text : '';
+    $('tmEdit').style.display = 'block';
+    $('tmEdit').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  $('tmAdd').onclick = () => openTempoEditor(null);
+  $('tmCancel').onclick = () => { SC.editIdx = null; $('tmEdit').style.display = 'none'; };
+  $('tmSave').onclick = () => {
+    const no = parseInt($('tmM').value, 10), beat = parseFloat($('tmB').value);
+    const ts = measureTS(no);
+    const len = (SC.tl.measures.find(x => x.no === no) || { len: ts.quarters }).len;
+    if (!(beat >= 1) || (beat - 1) * ts.beatQ >= len - 1e-9) { $('tmEditHint').textContent = '拍は1〜' + Math.round(len / ts.beatQ * 100) / 100 + 'の範囲で入れてください。'; return; }
+    const c = { type: tmType, measure: no, offset: Math.round((beat - 1) * ts.beatQ * 1000) / 1000, text: $('tmText').value.trim(), src: 'edit' };
+    if (tmType === 'set') {
+      const b = parseFloat($('tmBpm').value);
+      if (!(b >= 20 && b <= 300)) { $('tmEditHint').textContent = 'テンポは20〜300の数で入れてください。'; return; }
+      c.bpm = b;
+    } else if (tmType === 'fermata') {
+      const f = parseFloat($('tmF').value);
+      c.factor = f >= 1 && f <= 8 ? f : 2;
+    } else {
+      c.endMeasure = parseInt($('tmEM').value, 10);
+      const eb = parseFloat($('tmEB').value);
+      if (eb > 0) c.endOffset = Math.round(eb * measureTS(c.endMeasure).beatQ * 1000) / 1000;
+      const to = parseFloat($('tmTo').value);
+      if (to >= 20 && to <= 300) c.toBpm = to;
+    }
+    if (SC.editIdx === null) SC.changes.push(c); else SC.changes[SC.editIdx] = c;
+    SC.editIdx = null;
+    $('tmEdit').style.display = 'none';
+    afterTempoChange();
+  };
+  $('tmReset').onclick = () => {
+    try { localStorage.removeItem(tempoKey()); } catch (_) {}
+    SC.baseBpm = SC.data.bpm; SC.changes = SC.data.changes.map(c => Object.assign({}, c)); SC.tempoEdited = false;
+    $('tmEdit').style.display = 'none'; GD.cache = null;
+    $('bpmIn').value = SC.baseBpm || '';
+    updateScoreInfo(); resetScoreView();
+  };
+  // 楽譜データに書き戻せる形（楽譜読み取り指示書10章）でコピー
+  $('tmCopy').onclick = async () => {
+    const out = {
+      tempo: { bpm: SC.baseBpm },
+      tempoChanges: SC.changes.map(c => {
+        const o = { type: c.type, measure: c.measure, offset: c.offset };
+        for (const k of ['bpm', 'endMeasure', 'endOffset', 'toBpm', 'factor']) if (c[k] !== undefined) o[k] = c[k];
+        if (c.text) o.text = c.text;
+        return o;
+      })
+    };
+    const txt = JSON.stringify(out, null, 2);
+    try { await navigator.clipboard.writeText(txt); $('tmNote').textContent = 'コピーしました。楽譜データの tempo と tempoChanges をこの内容に置き換えられます。'; }
+    catch (_) { $('tmNote').textContent = 'コピーできませんでした：' + txt; }
+  };
 
   /* --- 表示 --- */
   function noteAt(q) { // q の位置で鳴っている音（なければ null）
@@ -1434,7 +1733,9 @@ function median(arr) {
     const m = measureAt(q);
     const beat = Math.floor((q - m.start) / m.ts.beatQ + 1e-6) + 1;
     $('scStat').className = 'scstat';
-    $('scStat').textContent = m.no + '小節　' + beat + '拍目';
+    let tempoTx = '';
+    if (SC.tm) { const b = SC.tm.bpmAt(q); tempoTx = '　♩=' + fmtBpm(b.bpm) + (b.ferm ? ' 𝄐' : b.ramp ? (SC.tm.bpmAt(q + 0.5).bpm < b.bpm ? ' rit.' : ' accel.') : ''); }
+    $('scStat').textContent = m.no + '小節　' + beat + '拍目' + tempoTx;
     $('scNote').innerHTML = n ? esc(n.german) + qMark(n) : '<span class="dim">休み</span>';
     $('scLyric').textContent = n ? (lyricOf(n) || '（のばす）') : ' ';
     const nx = nextNotesFrom(n ? n.start : q, 3);
@@ -1453,11 +1754,12 @@ function median(arr) {
 
   // 図のページ：開始小節から、1ページが5秒以上になるよう小節をまとめる
   function pagesList() {
-    const ms = SC.tl.measures, spq = secPerQ() || 0.75, out = [];
+    const ms = SC.tl.measures, out = [];
+    const secs = (a, b) => SC.tm ? SC.tm.tAt(b) - SC.tm.tAt(a) : (b - a) * 0.75;
     let i = SC.startIdx;
     while (i < ms.length) {
       let j = i, pe = ms[i].start;
-      while (j < ms.length && ((pe - ms[i].start) * spq < 5 || j === i)) { pe = ms[j].start + ms[j].len; j++; }
+      while (j < ms.length && (secs(ms[i].start, pe) < 5 || j === i)) { pe = ms[j].start + ms[j].len; j++; }
       out.push({ q0: ms[i].start, q1: pe, mi: i, mj: j });
       i = j;
     }
@@ -1565,12 +1867,13 @@ function median(arr) {
     beginScore();
   }
   function beginScore() {
-    const tl = SC.tl, m0 = tl.measures[SC.startIdx], spq = secPerQ();
-    const beatSec = m0.ts.beatQ * spq, beats = m0.ts.beats;
+    refreshTempo();
+    const tl = SC.tl, m0 = tl.measures[SC.startIdx], tm = SC.tm;
+    const beatSec = m0.ts.beatQ * 60 / tm.bpmAt(m0.start).bpm, beats = m0.ts.beats;
     const t0 = ctx.currentTime + 0.4;
     closeScoreFile();
     $('scSumCard').style.display = 'none';
-    SC.run = { spq, t0, beatSec, beats, startTime: t0 + beats * beatSec, q0: m0.start, voice: [], recent: [], noteIdx: -2, stats: new Map(),
+    SC.run = { tm, tq0: tm.tAt(m0.start), t0, beatSec, beats, startTime: t0 + beats * beatSec, q0: m0.start, voice: [], recent: [], noteIdx: -2, stats: new Map(),
       listen: GD.mode === 'listen', delay: GD.mode === 'sing' ? GD.delay / 1000 : 0 };
     if (GD.mode !== 'mic') startGuide(SC.run.startTime);
     if (SC.click) {
@@ -1615,12 +1918,12 @@ function median(arr) {
       drawRoll(R.q0);
       return;
     }
-    const q = R.q0 + (t - R.startTime) / R.spq;
+    const q = R.tm.qAt(R.tq0 + (t - R.startTime));
     R.lastQ = q;
     if (q >= tl.total) { endScore(true); stop(); $('scStat').textContent = '最後まで進みました'; return; }
     showScoreNote(q);
     // 判定はマイクの遅れを見込んだ時刻で行う
-    const qe = R.q0 + (t - SC_LATENCY - R.delay - R.startTime) / R.spq;
+    const qe = R.tm.qAt(R.tq0 + (t - SC_LATENCY - R.delay - R.startTime));
     if (R.listen) { setScoreVerdict(null); drawRoll(q); return; }
     const idx = noteAt(qe), n = idx >= 0 ? tl.notes[idx] : null;
     if (idx !== R.noteIdx) { R.recent = []; R.noteIdx = idx; }
@@ -1628,7 +1931,7 @@ function median(arr) {
     R.recent.push(freq); if (R.recent.length > 5) R.recent.shift();
     const f = median(R.recent);
     const pt = { q: qe, mf: midiFloat(f) };
-    if (n && (qe - n.start) * R.spq >= SC_SETTLE) {
+    if (n && R.tm.tAt(qe) - R.tm.tAt(n.start) >= SC_SETTLE) {
       const c = 1200 * Math.log2(f / scoreRefFreq(n));
       const v = Math.abs(c) > SC_WRONG ? 'wrong' : judge(c, S.tol);
       pt.v = v; pt.c = c; pt.ni = idx;
@@ -1680,20 +1983,21 @@ function median(arr) {
 
   // 各パートの音を OfflineAudioContext で書き出す（設定が同じなら作り直さない）
   async function renderGuide() {
-    const spq = secPerQ();
-    const key = JSON.stringify([SC.startIdx, SC.rate, curBpm(), S.A, S.temper, S.tonic, SC.tonicMode, SC.partIdx]);
+    refreshTempo();
+    const tm = SC.tm;
+    const key = JSON.stringify([SC.startIdx, SC.rate, curBpm(), SC.changes, S.A, S.temper, S.tonic, SC.tonicMode, SC.partIdx]);
     if (GD.cache && GD.cache.key === key) return GD.cache.bufs;
     const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
     const bufs = [];
     for (let pi = 0; pi < SC.data.parts.length; pi++) {
-      const tl = buildTimeline(pi), q0 = tl.measures[SC.startIdx].start;
-      const dur = Math.max(0.1, (tl.total - q0) * spq + 0.2);
+      const tl = buildTimeline(pi), q0 = tl.measures[SC.startIdx].start, tq0 = tm.tAt(q0);
+      const dur = Math.max(0.1, tm.tAt(tl.total) - tq0 + 0.2);
       const off = new OAC(1, Math.ceil(dur * GUIDE_SR), GUIDE_SR);
       const real = new Float32Array(GUIDE_HARM.length), imag = Float32Array.from(GUIDE_HARM);
       const wave = off.createPeriodicWave(real, imag);
       for (const n of tl.notes) {
         if (n.end <= q0) continue;
-        const t1 = (Math.max(n.start, q0) - q0) * spq, t2 = (n.end - q0) * spq;
+        const t1 = tm.tAt(Math.max(n.start, q0)) - tq0, t2 = tm.tAt(n.end) - tq0;
         const o = off.createOscillator(), g = off.createGain();
         o.setPeriodicWave(wave);
         o.frequency.value = scoreRefFreq(n);
@@ -1860,10 +2164,13 @@ function median(arr) {
       $('scAlign').style.display = 'none'; $('scSumCard').style.display = 'none';
       return;
     }
-    const spq = secPerQ(), mStart = tl.measures[SC.startIdx].start;
+    refreshTempo();
+    const tm = SC.tm, mStart = tl.measures[SC.startIdx].start;
+    if (!tm) { prog.textContent = '最初のテンポを入力してください。'; return; }
     const first = tl.notes.find(n => n.start >= mStart - 1e-9);
     const qs = first ? first.start : mStart;
     const t0 = onset + SC.adj; // この時刻を qs にそろえる
+    const tqs = tm.tAt(qs), qOf = tt => tm.qAt(tqs + (tt - t0));
     prog.textContent = '長さ ' + fmtTime(F.dur) + '・最初の声 ' + onset.toFixed(2) + '秒 → ' + tl.measures[first ? first.mi : SC.startIdx].no + '小節の最初の音（' + (first ? first.german : '') + '）';
     $('scAlign').style.display = 'block';
     $('alVal').textContent = (SC.adj > 0 ? '+' : SC.adj < 0 ? '−' : '±') + Math.abs(SC.adj).toFixed(2);
@@ -1872,7 +2179,7 @@ function median(arr) {
     const v = fr.map(o => (o.f && o.db >= S.level) ? o.f : null);
     const voice = [], stats = new Map();
     for (let i = 0; i < n; i++) {
-      const q = qs + (fr[i].t - t0) / spq;
+      const q = qOf(fr[i].t);
       if (q < mStart - 1 || q > tl.total + 0.5) continue;
       if (v[i] === null) { voice.push({ q, gap: true, mf: 0 }); continue; }
       const idx = noteAt(q);
@@ -1880,13 +2187,13 @@ function median(arr) {
       const w = [];
       for (let j = Math.max(0, i - 2); j <= Math.min(n - 1, i + 2); j++) {
         if (v[j] === null) continue;
-        if (noteAt(qs + (fr[j].t - t0) / spq) !== idx) continue;
+        if (noteAt(qOf(fr[j].t)) !== idx) continue;
         w.push(v[j]);
       }
       const f = median(w);
       const pt = { q, mf: midiFloat(f) };
       const nt = idx >= 0 ? tl.notes[idx] : null;
-      if (nt && (q - nt.start) * spq >= SC_SETTLE) {
+      if (nt && tm.tAt(q) - tm.tAt(nt.start) >= SC_SETTLE) {
         const c = 1200 * Math.log2(f / scoreRefFreq(nt));
         const vv = Math.abs(c) > SC_WRONG ? 'wrong' : judge(c, S.tol);
         pt.v = vv; pt.c = c;
@@ -1919,9 +2226,11 @@ function median(arr) {
         const events = list.filter(e => e[0] === no).map(([, pitch, ql, lyr, tie, conf]) => {
           const ev = pitch === null ? { type: 'rest', offset: off, quarterLength: ql, performedOffset: off, performedQuarterLength: ql } : (() => {
             const midi = pitchToMidi(pitch);
-            return { type: 'note', pitch, written: octUp ? pitch.replace(/\d+$/, d => String(+d + 1)) : pitch, midi, german: noteNameDE(midi),
+            const o = { type: 'note', pitch, written: octUp ? pitch.replace(/\d+$/, d => String(+d + 1)) : pitch, midi, german: noteNameDE(midi),
               offset: off, quarterLength: ql, performedOffset: off, performedQuarterLength: ql,
               tie: tie || null, lyric: lyr ? { '1': lyr } : null, confidence: conf || 'high' };
+            if (no === 4 && off === 2) o.fermata = true; // 最後の音にフェルマータ
+            return o;
           })();
           off += ql;
           return ev;
@@ -1933,6 +2242,10 @@ function median(arr) {
     return {
       title: '試験用データ', composer: '', key: F, timeSignature: '4/4',
       tempo: { bpm: 80, text: '', confirmed: true },
+      tempoChanges: [
+        { type: 'rit', measure: 3, offset: 2.0, endMeasure: 3, toBpm: 60, text: 'rit.' },
+        { type: 'set', measure: 4, offset: 0.0, bpm: 80, text: 'a tempo' }
+      ],
       parts: [part('S', 'Soprano', 'treble', sop, false), part('T', 'Tenor', 'treble-8va-bassa', ten, true)],
       structure: { repeats: [], playbackOrder: [1, 2, 3, 4] },
       uncertain: [{ part: 'S', measure: 3, event: 4, reason: '試験用', candidates: ['A4', 'G4'] }]
