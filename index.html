@@ -124,7 +124,8 @@
   .gprow .tog.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   .gprow .pn { width: 6em; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .gprow .pn small { color: var(--accent); font-weight: 700; }
-  .gprow input[type=range] { flex: 1; margin: 0; }
+  .gprow input[type=range] { flex: 1; margin: 0; min-width: 0; }
+  .gprow .tim { flex: none; width: 52px; height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); font-size: 11px; line-height: 1.2; }
   #gdMode button { font-size: 14px; padding: 0 2px; }
   .notice { margin-top: 10px; font-size: 13px; line-height: 1.7; background: var(--bg); border-radius: 12px; padding: 10px 12px; }
   .notice:empty { display: none; }
@@ -310,6 +311,7 @@
   <div class="card sm" id="gdCard" style="display:none">
     <div class="label">鳴らすパートと音量</div>
     <div id="gdParts"></div>
+    <div class="hint" id="gdPrep"></div>
     <div id="gdDelayBox" style="margin-top:12px">
       <div class="label">遅れの補正（ワイヤレスイヤホン用）</div>
       <div class="stepper small">
@@ -776,6 +778,7 @@ function median(arr) {
     $('band').style.width = (2 * w) + '%';
     if (lastShown) showNote(lastShown);
     drawGraph();
+    if (SC.tl && typeof prepareGuideSoon === 'function') prepareGuideSoon();
     if (SC.tl) { const w2 = Math.min(50, S.tol); $('scBand').style.left = (50 - w2) + '%'; $('scBand').style.width = (2 * w2) + '%'; refreshScore(); }
     if (fileData) renderFile();
     save();
@@ -1274,7 +1277,7 @@ function median(arr) {
         });
         measures.set(no, { no, key: curKey, ts, events: evs });
       });
-      parts.push({ id: pt.id || String(pi), name: pname, measures });
+      parts.push({ id: pt.id || String(pi), name: pname, instrument: pt.instrument || null, measures });
     });
     let order = obj.structure && Array.isArray(obj.structure.playbackOrder) ? obj.structure.playbackOrder.slice() : null;
     if (!order || !order.length) {
@@ -1340,8 +1343,14 @@ function median(arr) {
       if (m) {
         for (const e of m.events) {
           if (e.rest) continue;
-          const st = pos + e.off, en = st + e.ql, last = notes[notes.length - 1];
-          if ((e.tie === 'continue' || e.tie === 'stop') && last && last.midi === e.midi && Math.abs(last.end - st) < 1e-6) {
+          const st = pos + e.off, en = st + e.ql;
+          let last = null; // タイの相手：同じ高さで、ちょうどこの音の始まりで終わる音（和音にも対応）
+          if (e.tie === 'continue' || e.tie === 'stop') {
+            for (let k = notes.length - 1; k >= 0 && k >= notes.length - 16; k--) {
+              if (notes[k].midi === e.midi && Math.abs(notes[k].end - st) < 1e-6) { last = notes[k]; break; }
+            }
+          }
+          if (last) {
             last.end = en; // タイでつながった音は伸ばす
             if (e.conf !== 'high' && last.conf === 'high') last.conf = e.conf;
             continue;
@@ -1494,7 +1503,7 @@ function median(arr) {
     }
     if (running) stop();
     SC.data = r.score; SC.warns = r.warns; SC.label = label;
-    SC.partIdx = 0; SC.rate = 100; SC.startIdx = 0; SC.tonicMode = 'auto'; SC.last = null;
+    SC.partIdx = Math.max(0, r.score.parts.findIndex(p => !isPianoPart(p))); SC.rate = 100; SC.startIdx = 0; SC.tonicMode = 'auto'; SC.last = null;
     loadTempoEdits();
     SC.verse = r.score.verses[0] || '1';
     openLoader(false);
@@ -1575,6 +1584,7 @@ function median(arr) {
     $('bpmShow').textContent = bpm ? (SC.rate !== 100 ? '最初 ♩=' + fmtBpm(bpm * SC.rate / 100) : '') : 'テンポを入力';
     if (document.activeElement !== $('bpmIn')) $('bpmIn').value = bpm || '';
     renderTempoList();
+    prepareGuideSoon();
     const unc = SC.tl.notes.filter(n => n.conf !== 'high').length;
     $('scSub').textContent = SC.label + '・' + part.name + '・' + SC.tl.notes.length + '音' + (unc ? '（不確実 ' + unc + '）' : '') +
       (SC.warns && SC.warns.length ? '\n注意：' + SC.warns.join('／') : '');
@@ -1583,10 +1593,14 @@ function median(arr) {
     $('scBtn').disabled = !bpm;
     const w = Math.min(50, S.tol); $('scBand').style.left = (50 - w) + '%'; $('scBand').style.width = (2 * w) + '%';
   }
-  $('scPart').onchange = e => { SC.partIdx = parseInt(e.target.value, 10); initGuideParts(); renderGuideUI(); rebuildScore(); };
-  $('scStart').onchange = e => { SC.startIdx = parseInt(e.target.value, 10); resetScoreView(); };
+  $('scPart').onchange = e => {
+    SC.partIdx = parseInt(e.target.value, 10);
+    GD.on = SC.data.parts.map((_, i) => i === SC.partIdx || (GD.on[i] && GD.timbre[i] === 'piano'));
+    renderGuideUI(); rebuildScore();
+  };
+  $('scStart').onchange = e => { SC.startIdx = parseInt(e.target.value, 10); resetScoreView(); prepareGuideSoon(); };
   $('scVerse').onchange = e => { SC.verse = e.target.value; resetScoreView(); };
-  $('scTonic').onchange = e => { SC.tonicMode = e.target.value; refreshScore(); };
+  $('scTonic').onchange = e => { SC.tonicMode = e.target.value; refreshScore(); prepareGuideSoon(); };
   $('rMinus').onclick = () => { SC.rate = Math.max(50, SC.rate - 5); updateScoreInfo(); resetScoreView(); };
   $('rPlus').onclick = () => { SC.rate = Math.min(150, SC.rate + 5); updateScoreInfo(); resetScoreView(); };
   $('bpmIn').oninput = e => { const v = parseFloat(e.target.value); SC.baseBpm = v >= 20 && v <= 300 ? v : null; saveTempoEdits(); updateScoreInfo(); resetScoreView(); };
@@ -1629,7 +1643,7 @@ function median(arr) {
     $('tmReset').style.visibility = SC.tempoEdited ? 'visible' : 'hidden';
     $('tmNote').textContent = SC.tempoEdited ? 'この曲のテンポは画面で修正しています（この端末に保存）。' : '';
   }
-  function afterTempoChange() { saveTempoEdits(); GD.cache = null; updateScoreInfo(); resetScoreView(); }
+  function afterTempoChange() { saveTempoEdits(); updateScoreInfo(); resetScoreView(); }
   let tmType = 'set';
   function setTmType(t) {
     tmType = t;
@@ -1692,7 +1706,7 @@ function median(arr) {
   $('tmReset').onclick = () => {
     try { localStorage.removeItem(tempoKey()); } catch (_) {}
     SC.baseBpm = SC.data.bpm; SC.changes = SC.data.changes.map(c => Object.assign({}, c)); SC.tempoEdited = false;
-    $('tmEdit').style.display = 'none'; GD.cache = null;
+    $('tmEdit').style.display = 'none';
     $('bpmIn').value = SC.baseBpm || '';
     updateScoreInfo(); resetScoreView();
   };
@@ -1861,8 +1875,11 @@ function median(arr) {
     if (GD.mode !== 'mic') {
       $('scStat').className = 'scstat';
       $('scStat').textContent = 'ガイドの音を準備中…';
-      try { await renderGuide(); }
-      catch (e) { showError('ガイドの音を作れませんでした：' + ((e && (e.message || e.name)) || e)); stop(); return; }
+      try {
+        let r = await renderGuide();
+        if (!r || r.key !== guideKey()) r = await renderGuide(); // 準備中に設定が変わった場合は作り直す
+        if (!r) throw new Error('準備できませんでした');
+      } catch (e) { showError('ガイドの音を作れませんでした：' + ((e && (e.message || e.name)) || e)); stop(); return; }
       if (!running) return;
     }
     beginScore();
@@ -1947,15 +1964,22 @@ function median(arr) {
   window.addEventListener('resize', () => { if (SC.tl) drawRoll(); });
 
   /* ===================== ガイドモード ===================== */
-  const GD = { mode: 'mic', on: [], vol: [], delay: 0, cache: null, srcs: [], gains: [] };
+  const GD = { mode: 'mic', on: [], vol: [], timbre: [], delay: 0, cache: null, srcs: [], gains: [], gen: 0, job: null, timer: 0 };
   const GUIDE_SR = 44100;
-  const GUIDE_AMP = 0.25;                       // 1音の大きさ
-  const GUIDE_HARM = [0, 1, 0.4, 0.2, 0.1];     // 倍音の強さ（楽譜読み取り手順書の手順8）
+  const GUIDE_AMP = 0.25;                       // 歌の音の1音の大きさ
+  const GUIDE_HARM = [1, 0.4, 0.2, 0.1];        // 歌の音の倍音の強さ（楽譜読み取り手順書の手順8）
   const GUIDE_ATTACK = 0.015, GUIDE_RELEASE = 0.04;
+  const PIANO_AMP = 0.16;                       // ピアノの1音の大きさ（和音で重なるため小さめ）
+  const PIANO_BRIGHT = [1, 0.55, 0.35, 0.25, 0.18, 0.12, 0.08, 0.05]; // 鳴らした直後の明るい音
+  const PIANO_DULL = [1, 0.25, 0.08];           // 減衰したあとの丸い音
+  const PIANO_ATTACK = 0.004, PIANO_RELEASE = 0.08;
+  const PIANO_RE = /piano|pf\.?$|^pf|pno|klavier|clavier|keyboard|ピアノ|伴奏|右手|左手|\br\.?h\.?\b|\bl\.?h\.?\b/i;
 
+  function isPianoPart(p) { return p.instrument === 'piano' || PIANO_RE.test(p.name || '') || PIANO_RE.test(p.id || ''); }
   function initGuideParts() {
+    GD.timbre = SC.data.parts.map(p => isPianoPart(p) ? 'piano' : 'voice');
     GD.on = SC.data.parts.map((_, i) => i === SC.partIdx);
-    GD.vol = SC.data.parts.map(() => 80);
+    GD.vol = SC.data.parts.map((_, i) => GD.timbre[i] === 'piano' ? 50 : 80);
     GD.cache = null;
   }
   function renderGuideUI() {
@@ -1967,62 +1991,144 @@ function median(arr) {
     $('gdParts').innerHTML = SC.data.parts.map((p, i) =>
       '<div class="gprow"><button type="button" class="tog' + (GD.on[i] ? ' on' : '') + '" data-i="' + i + '">' + (GD.on[i] ? 'オン' : 'オフ') + '</button>' +
       '<span class="pn">' + esc(p.name) + (i === SC.partIdx ? '<br><small>練習中</small>' : '') + '</span>' +
-      '<input type="range" min="0" max="100" step="5" value="' + GD.vol[i] + '" data-i="' + i + '" aria-label="' + esc(p.name) + 'の音量"></div>').join('');
+      '<input type="range" min="0" max="100" step="5" value="' + GD.vol[i] + '" data-i="' + i + '" aria-label="' + esc(p.name) + 'の音量">' +
+      '<button type="button" class="tim" data-t="' + i + '" aria-label="音色">' + (GD.timbre[i] === 'piano' ? '🎹<br>ピアノ' : '♪<br>歌') + '</button></div>').join('');
     $('gdParts').querySelectorAll('.tog').forEach(b => b.onclick = () => { const i = +b.dataset.i; GD.on[i] = !GD.on[i]; renderGuideUI(); applyGuideGains(); });
     $('gdParts').querySelectorAll('input').forEach(r => r.oninput = () => { GD.vol[+r.dataset.i] = +r.value; applyGuideGains(); });
+    $('gdParts').querySelectorAll('.tim').forEach(b => b.onclick = () => {
+      if (SC.run) return;
+      const i = +b.dataset.t; GD.timbre[i] = GD.timbre[i] === 'piano' ? 'voice' : 'piano';
+      renderGuideUI(); prepareGuideSoon();
+    });
     const n = [];
     if (GD.mode === 'sing') n.push('🎧 <b>イヤホンを使ってください。</b>スピーカーから鳴らすとマイクがガイドの音を拾い、歌声の音程を正しく評価できません。');
     n.push('音が出ないときは、iPhoneの消音（マナーモード）をオフにして音量を上げてください。' + (GD.mode === 'sing' ? 'マイクを使っている間は、再生音が小さくなったり出力先が変わったりすることがあります。' : ''));
+    n.push('右の「♪歌／🎹ピアノ」で、パートごとの音色を切り替えられます。');
     $('gdNotice').innerHTML = SC.run ? '' : n.join('<br>');
     $('scBtn').textContent = SC.run ? '停止' : (GD.mode === 'listen' ? '再生' : '開始');
+    showGuidePrep();
   }
-  document.querySelectorAll('#gdMode button').forEach(b => b.onclick = () => { if (SC.run) return; GD.mode = b.dataset.v; renderGuideUI(); });
+  function showGuidePrep() {
+    const el = $('gdPrep');
+    if (!el) return;
+    el.textContent = GD.mode === 'mic' || SC.run ? '' : (GD.cache && GD.cache.key === guideKey()) ? 'ガイドの音：準備できています' : 'ガイドの音：準備中…';
+  }
+  document.querySelectorAll('#gdMode button').forEach(b => b.onclick = () => { if (SC.run) return; GD.mode = b.dataset.v; renderGuideUI(); prepareGuideSoon(); });
   const setDelay = v => { GD.delay = Math.max(0, Math.min(400, Math.round(v / 10) * 10)); renderGuideUI(); };
   $('dlMinus').onclick = () => setDelay(GD.delay - 10);
   $('dlPlus').onclick = () => setDelay(GD.delay + 10);
   $('dlRange').oninput = e => setDelay(+e.target.value);
 
-  // 各パートの音を OfflineAudioContext で書き出す（設定が同じなら作り直さない）
-  async function renderGuide() {
+  // 音の高さ・時間に関わる設定だけを鍵にする（練習パート・オン／オフ・音量では作り直さない）
+  function guideKey() {
+    return JSON.stringify([SC.startIdx, SC.rate, curBpm(), SC.changes, S.A, S.temper, S.tonic, SC.tonicMode, GD.timbre]);
+  }
+  function makeTable(harm) { // 1周期分の波形（最大値を1にそろえる）
+    const N = 2048, t = new Float32Array(N + 1);
+    let mx = 0;
+    for (let i = 0; i < N; i++) {
+      let v = 0;
+      for (let h = 0; h < harm.length; h++) v += harm[h] * Math.sin(2 * Math.PI * (h + 1) * i / N);
+      t[i] = v; mx = Math.max(mx, Math.abs(v));
+    }
+    for (let i = 0; i < N; i++) t[i] /= mx;
+    t[N] = t[0];
+    return t;
+  }
+  const TBL_VOICE = makeTable(GUIDE_HARM), TBL_BRIGHT = makeTable(PIANO_BRIGHT), TBL_DULL = makeTable(PIANO_DULL);
+
+  // 1パート分の波形を JavaScript で直接計算する（OfflineAudioContext より大幅に速い）
+  function synthPart(pi, tm, q0, tq0) {
+    const tl = buildTimeline(pi);
+    const dur = Math.max(0.1, tm.tAt(tl.total) - tq0 + 0.2);
+    const piano = GD.timbre[pi] === 'piano';
+    const x = new Float32Array(Math.ceil(dur * GUIDE_SR) + 1);
+    const N = 2048;
+    for (const n of tl.notes) {
+      if (n.end <= q0) continue;
+      const t1 = tm.tAt(Math.max(n.start, q0)) - tq0, t2 = tm.tAt(n.end) - tq0;
+      const f = scoreRefFreq(n), inc = f * N / GUIDE_SR;
+      const i1 = Math.max(0, Math.round(t1 * GUIDE_SR));
+      if (!piano) {
+        const i2 = Math.min(x.length, Math.round(t2 * GUIDE_SR));
+        const len = i2 - i1;
+        if (len <= 0) continue;
+        const a = Math.max(1, Math.round(Math.min(GUIDE_ATTACK, (t2 - t1) / 3) * GUIDE_SR));
+        const r = Math.max(1, Math.round(Math.min(GUIDE_RELEASE, (t2 - t1) / 3) * GUIDE_SR));
+        let ph = 0;
+        for (let k = 0; k < len; k++) {
+          const env = k < a ? k / a : (len - k < r ? (len - k) / r : 1);
+          const ip = ph | 0, fr = ph - ip;
+          x[i1 + k] += GUIDE_AMP * env * (TBL_VOICE[ip] + (TBL_VOICE[ip + 1] - TBL_VOICE[ip]) * fr);
+          ph += inc; if (ph >= N) ph -= N;
+        }
+      } else {
+        // 鍵盤を押している間は減衰しながら鳴り、離したら短く消える
+        const rel = Math.round(PIANO_RELEASE * GUIDE_SR);
+        const hold = Math.max(1, Math.round((t2 - t1) * GUIDE_SR));
+        const len = Math.min(x.length - i1, hold + rel);
+        if (len <= 0) continue;
+        const tauD = Math.min(4, Math.max(0.35, 1.8 * Math.pow(261.6 / f, 0.6))); // 低い音ほど長く響く
+        const tauB = tauD * 0.22;
+        const kD = Math.exp(-1 / (tauD * GUIDE_SR)), kB = Math.exp(-1 / (tauB * GUIDE_SR));
+        const a = Math.max(1, Math.round(PIANO_ATTACK * GUIDE_SR));
+        let eD = 0.55, eB = 0.45, ph = 0;
+        for (let k = 0; k < len; k++) {
+          let env = k < a ? k / a : 1;
+          if (k >= hold) env *= 1 - (k - hold) / rel;
+          const ip = ph | 0, fr = ph - ip;
+          const vb = TBL_BRIGHT[ip] + (TBL_BRIGHT[ip + 1] - TBL_BRIGHT[ip]) * fr;
+          const vd = TBL_DULL[ip] + (TBL_DULL[ip + 1] - TBL_DULL[ip]) * fr;
+          x[i1 + k] += PIANO_AMP * env * (eB * vb + eD * vd);
+          eB *= kB; eD *= kD;
+          ph += inc; if (ph >= N) ph -= N;
+        }
+      }
+    }
+    return x;
+  }
+  // 全パートを作る。パートごとに処理を区切り、画面が固まらないようにする
+  async function buildGuide(key, gen) {
     refreshTempo();
     const tm = SC.tm;
-    const key = JSON.stringify([SC.startIdx, SC.rate, curBpm(), SC.changes, S.A, S.temper, S.tonic, SC.tonicMode, SC.partIdx]);
-    if (GD.cache && GD.cache.key === key) return GD.cache.bufs;
-    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    const bufs = [];
+    if (!tm) return null;
+    const q0 = SC.tl.measures[SC.startIdx].start, tq0 = tm.tAt(q0);
+    const data = [];
     for (let pi = 0; pi < SC.data.parts.length; pi++) {
-      const tl = buildTimeline(pi), q0 = tl.measures[SC.startIdx].start, tq0 = tm.tAt(q0);
-      const dur = Math.max(0.1, tm.tAt(tl.total) - tq0 + 0.2);
-      const off = new OAC(1, Math.ceil(dur * GUIDE_SR), GUIDE_SR);
-      const real = new Float32Array(GUIDE_HARM.length), imag = Float32Array.from(GUIDE_HARM);
-      const wave = off.createPeriodicWave(real, imag);
-      for (const n of tl.notes) {
-        if (n.end <= q0) continue;
-        const t1 = tm.tAt(Math.max(n.start, q0)) - tq0, t2 = tm.tAt(n.end) - tq0;
-        const o = off.createOscillator(), g = off.createGain();
-        o.setPeriodicWave(wave);
-        o.frequency.value = scoreRefFreq(n);
-        const a = Math.min(GUIDE_ATTACK, (t2 - t1) / 3), r = Math.min(GUIDE_RELEASE, (t2 - t1) / 3);
-        g.gain.setValueAtTime(0, t1);
-        g.gain.linearRampToValueAtTime(GUIDE_AMP, t1 + a);
-        g.gain.setValueAtTime(GUIDE_AMP, t2 - r);
-        g.gain.linearRampToValueAtTime(0, t2);
-        o.connect(g); g.connect(off.destination);
-        o.start(t1); o.stop(t2 + 0.01);
-      }
-      bufs.push(await new Promise((res, rej) => {
-        off.oncomplete = e => res(e.renderedBuffer);
-        const pr = off.startRendering();
-        if (pr && pr.then) pr.then(res, rej);
-      }));
+      if (gen !== GD.gen) return null; // 途中で設定が変わったら中止
+      data.push(synthPart(pi, tm, q0, tq0));
+      await new Promise(r => setTimeout(r, 0));
     }
-    GD.cache = { key, bufs };
-    return bufs;
+    if (gen !== GD.gen) return null;
+    GD.cache = { key, data };
+    showGuidePrep();
+    return GD.cache;
+  }
+  async function renderGuide() {
+    const key = guideKey();
+    if (GD.cache && GD.cache.key === key) return GD.cache;
+    if (GD.job && GD.job.key === key) { const r = await GD.job.p; if (r) return r; }
+    const gen = ++GD.gen;
+    const job = { key, p: buildGuide(key, gen) };
+    GD.job = job;
+    const r = await job.p;
+    if (GD.job === job) GD.job = null;
+    return r;
+  }
+  // 読み込み直後・設定を変えたときに、裏で先に作っておく
+  function prepareGuideSoon() {
+    clearTimeout(GD.timer);
+    if (!SC.data || !SC.tl || GD.mode === 'mic') { showGuidePrep(); return; }
+    showGuidePrep();
+    if (GD.cache && GD.cache.key === guideKey()) return;
+    GD.timer = setTimeout(() => { if (!SC.run && SC.data) renderGuide().catch(() => {}); }, 250);
   }
   function startGuide(when) {
     stopGuide();
     if (!GD.cache) return;
-    GD.cache.bufs.forEach((b, i) => {
+    GD.cache.data.forEach((x, i) => {
+      const b = ctx.createBuffer(1, x.length, GUIDE_SR);
+      if (b.copyToChannel) b.copyToChannel(x, 0); else b.getChannelData(0).set(x);
       const src = ctx.createBufferSource(), g = ctx.createGain();
       src.buffer = b;
       g.gain.value = GD.on[i] ? GD.vol[i] / 100 : 0;
@@ -2038,7 +2144,7 @@ function median(arr) {
     GD.srcs.forEach(s2 => { try { s2.stop(); } catch (_) {} });
     GD.srcs = []; GD.gains = [];
   }
-  window.pitchCheckDebug = { GD, SC, renderGuide };
+  window.pitchCheckDebug = { GD, SC, renderGuide, guideKey };
 
   /* --- 音ごとの集計 --- */
   function addStat(stats, idx, v, c, f) {
